@@ -1,12 +1,15 @@
 import { motion } from "framer-motion";
 import shake from "@/assets/dessert-shake.jpg";
 import sundae from "@/assets/dessert-sundae.jpg";
+import biscoffStorm from "@/assets/biscoff-storm.png";
+import oreoRoyale from "@/assets/oreo-royale.png";
+import strawberryCloud from "@/assets/strawberry-cloud.png";
 
 const shakes = [
   { name: "Belgian Cocoa", price: "₹ 280", note: "Double chocolate · ganache · cream", img: shake, span: "md:col-span-2 md:row-span-2" },
-  { name: "Biscoff Storm", price: "₹ 320", note: "Caramelised cookie · vanilla bean" },
-  { name: "Oreo Royale", price: "₹ 260", note: "Crushed cocoa · whipped tower" },
-  { name: "Strawberry Cloud", price: "₹ 240", note: "Fresh berries · house cream" },
+  { name: "Biscoff Storm", price: "₹ 320", note: "Caramelised cookie · vanilla bean", img: biscoffStorm },
+  { name: "Oreo Royale", price: "₹ 260", note: "Crushed cocoa · whipped tower", img: oreoRoyale },
+  { name: "Strawberry Cloud", price: "₹ 240", note: "Fresh berries · house cream", img: strawberryCloud },
   { name: "Cold Brew Float", price: "₹ 280", note: "Espresso · gelato · gold dust", img: sundae, span: "md:col-span-2" },
 ];
 

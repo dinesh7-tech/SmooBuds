@@ -1,25 +1,25 @@
 import { motion } from "framer-motion";
-import brownie from "@/assets/dessert-brownie.jpg";
-import cheesecake from "@/assets/dessert-cheesecake.jpg";
-import sundae from "@/assets/dessert-sundae.jpg";
-import shake from "@/assets/dessert-shake.jpg";
-import loaded from "@/assets/dessert-loaded.jpg";
-import ice from "@/assets/icecream-collection.jpg";
-import hero from "@/assets/hero-dessert.jpg";
-import craft from "@/assets/craft-hands.jpg";
-import interior from "@/assets/store-interior.jpg";
+import insta1 from "@/assets/instagram-1.jpg";
+import insta2 from "@/assets/instagram-2.jpg";
+import insta3 from "@/assets/instagram-3.jpg";
+import insta4 from "@/assets/instagram-4.jpg";
+import insta5 from "@/assets/instagram-5.jpg";
+import insta6 from "@/assets/instagram-6.jpg";
+import insta7 from "@/assets/instagram-7.jpg";
+import insta8 from "@/assets/instagram-8.jpg";
+import insta9 from "@/assets/instagram-9.jpg";
 import { Instagram } from "lucide-react";
 
 const tiles = [
-  { src: brownie, h: "row-span-2" },
-  { src: ice, h: "" },
-  { src: sundae, h: "row-span-2" },
-  { src: shake, h: "" },
-  { src: cheesecake, h: "row-span-2" },
-  { src: loaded, h: "" },
-  { src: hero, h: "" },
-  { src: craft, h: "row-span-2" },
-  { src: interior, h: "" },
+  { src: insta1, h: "row-span-2", href: "https://www.instagram.com/reel/DYO7jkYo4I3/?igsh=cW5lem94MXpzMXRq" },
+  { src: insta2, h: "", href: "https://www.instagram.com/reel/DYAD0QIJL83/?igsh=MTVvOTM5ODFrdWtxOQ==" },
+  { src: insta3, h: "row-span-2", href: "https://www.instagram.com/reel/DXiq53HDJ--/?igsh=aHQ3NXpibXQ4N25o" },
+  { src: insta4, h: "", href: "https://www.instagram.com/reel/DVyaLMsibyR/?igsh=MXRrcXNhMjZqeXR1bw==" },
+  { src: insta5, h: "row-span-2", href: "https://www.instagram.com/smoobuds.kakinada/" },
+  { src: insta6, h: "", href: "https://www.instagram.com/smoobuds.kakinada/" },
+  { src: insta7, h: "", href: "https://www.instagram.com/smoobuds.kakinada/" },
+  { src: insta8, h: "row-span-2", href: "https://www.instagram.com/smoobuds.kakinada/" },
+  { src: insta9, h: "", href: "https://www.instagram.com/smoobuds.kakinada/" },
 ];
 
 export function Gallery() {
@@ -45,26 +45,33 @@ export function Gallery() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 auto-rows-[180px] md:auto-rows-[200px] gap-3">
           {tiles.map((t, i) => (
-            <motion.figure
+            <a
               key={i}
-              initial={{ opacity: 0, scale: 0.92 }}
-              whileInView={{ opacity: 1, scale: 1 }}
-              viewport={{ once: true, margin: "-60px" }}
-              transition={{ duration: 0.8, delay: (i % 6) * 0.05, ease: [0.22, 1, 0.36, 1] }}
-              className={`group relative overflow-hidden rounded-2xl ${t.h}`}
+              href={t.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`block relative rounded-2xl overflow-hidden ${t.h}`}
             >
-              <img
-                src={t.src}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                className="absolute inset-0 h-full w-full object-cover transition-transform duration-[1.4s] ease-out group-hover:scale-110"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-sage-deep/80 via-transparent to-transparent opacity-60 group-hover:opacity-30 transition-opacity duration-700" />
-              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500">
-                <Instagram className="text-gold drop-shadow-lg" size={32} />
-              </div>
-            </motion.figure>
+              <motion.figure
+                initial={{ opacity: 0, scale: 0.92 }}
+                whileInView={{ opacity: 1, scale: 1 }}
+                viewport={{ once: true, margin: "-60px" }}
+                transition={{ duration: 0.8, delay: (i % 6) * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                className="group relative overflow-hidden rounded-2xl h-full w-full"
+              >
+                <img
+                  src={t.src}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute inset-0 h-full w-full object-cover transition-transform duration-[1.4s] ease-out group-hover:scale-110"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-sage-deep/80 via-transparent to-transparent opacity-60 group-hover:opacity-30 transition-opacity duration-700" />
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+                  <Instagram className="text-gold drop-shadow-lg" size={32} />
+                </div>
+              </motion.figure>
+            </a>
           ))}
         </div>
       </div>

@@ -51,14 +51,14 @@ export function Reviews() {
         </div>
 
         {/* Counters */}
-        <div className="grid grid-cols-3 gap-4 max-w-3xl mx-auto mb-16">
+        <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-sage/15 max-w-3xl mx-auto mb-16">
           {[
             { v: 24000, s: "+", l: "Happy guests" },
             { v: 4, s: ".9", l: "Avg. rating" },
             { v: 120, s: "+", l: "Signature recipes" },
           ].map((s) => (
-            <div key={s.l} className="text-center">
-              <div className="font-display text-4xl md:text-6xl font-extrabold text-sage-deep tracking-tight">
+            <div key={s.l} className="text-center py-8 sm:py-0 px-4">
+              <div className="font-display text-5xl sm:text-4xl md:text-6xl font-extrabold text-sage-deep tracking-tight">
                 <Counter to={s.v} suffix={s.s} />
               </div>
               <p className="mt-2 text-xs tracking-[0.3em] uppercase text-sage-deep/65 font-display font-semibold">{s.l}</p>

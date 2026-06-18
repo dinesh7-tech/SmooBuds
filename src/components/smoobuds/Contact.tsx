@@ -23,10 +23,11 @@ export function Contact() {
             <div className="aspect-[16/10] w-full bg-sage-deep">
               <iframe
                 title="SMOOBUDS Kakinada location"
-                src="https://www.google.com/maps?q=Kakinada,Andhra+Pradesh&output=embed"
+                src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3631.84957598092!2d82.2381727751559!3d16.990391583830725!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3a38290079ba09f5%3A0x77a1b06c4dad67ce!2sSmoo%20buds!5e1!3m2!1sen!2sin!4v1781803160828!5m2!1sen!2sin"
                 className="h-full w-full"
                 style={{ filter: "grayscale(0.4) contrast(1.05)" }}
                 loading="lazy"
+                allowFullScreen
                 referrerPolicy="no-referrer-when-downgrade"
               />
             </div>

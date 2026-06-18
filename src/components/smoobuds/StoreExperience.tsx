@@ -19,16 +19,25 @@ export function StoreExperience() {
 
   return (
     <section id="gallery" ref={ref} className="relative bg-cream overflow-hidden">
-      {/* Full-bleed cinematic image */}
+      {/* Full-bleed cinematic media */}
       <div className="relative h-[80vh] min-h-[600px] overflow-hidden">
-        <motion.img
-          style={{ y, scale }}
-          src={interior}
-          alt="SMOOBUDS lounge interior with velvet seating and warm pendant lighting"
-          loading="lazy"
-          decoding="async"
-          className="absolute inset-0 h-[120%] w-full object-cover"
-        />
+
+        {/* Desktop — looping background video */}
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="metadata"
+          aria-hidden="true"
+          className="absolute inset-0 h-full w-full object-cover"
+        >
+          <source
+            src="https://res.cloudinary.com/dhdnd1w8z/video/upload/v1781800426/Video-875_ixmvei.mp4"
+            type="video/mp4"
+          />
+        </video>
+
         <div className="absolute inset-0 bg-gradient-to-b from-sage-deep/40 via-transparent to-sage-deep/80" />
 
         <div className="relative z-10 mx-auto flex h-full max-w-7xl flex-col justify-end px-6 pb-16">
