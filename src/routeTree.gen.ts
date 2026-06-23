@@ -9,38 +9,200 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as MenuRouteImport } from './routes/menu'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminTablesRouteImport } from './routes/admin/tables'
+import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
+import { Route as AdminMenuRouteImport } from './routes/admin/menu'
+import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminKitchenRouteImport } from './routes/admin/kitchen'
+import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
+import { Route as AdminAnalyticsRouteImport } from './routes/admin/analytics'
+import { Route as AdminOrdersIndexRouteImport } from './routes/admin/orders/index'
+import { Route as AdminOrdersLiveRouteImport } from './routes/admin/orders/live'
 
+const MenuRoute = MenuRouteImport.update({
+  id: '/menu',
+  path: '/menu',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminTablesRoute = AdminTablesRouteImport.update({
+  id: '/tables',
+  path: '/tables',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSettingsRoute = AdminSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminMenuRoute = AdminMenuRouteImport.update({
+  id: '/menu',
+  path: '/menu',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminKitchenRoute = AdminKitchenRouteImport.update({
+  id: '/kitchen',
+  path: '/kitchen',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminDashboardRoute = AdminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminOrdersIndexRoute = AdminOrdersIndexRouteImport.update({
+  id: '/orders/',
+  path: '/orders/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminOrdersLiveRoute = AdminOrdersLiveRouteImport.update({
+  id: '/orders/live',
+  path: '/orders/live',
+  getParentRoute: () => AdminRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/menu': typeof MenuRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/kitchen': typeof AdminKitchenRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/menu': typeof AdminMenuRoute
+  '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tables': typeof AdminTablesRoute
+  '/admin/': typeof AdminIndexRoute
+  '/admin/orders/live': typeof AdminOrdersLiveRoute
+  '/admin/orders/': typeof AdminOrdersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/menu': typeof MenuRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/kitchen': typeof AdminKitchenRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/menu': typeof AdminMenuRoute
+  '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tables': typeof AdminTablesRoute
+  '/admin': typeof AdminIndexRoute
+  '/admin/orders/live': typeof AdminOrdersLiveRoute
+  '/admin/orders': typeof AdminOrdersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/menu': typeof MenuRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/kitchen': typeof AdminKitchenRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/menu': typeof AdminMenuRoute
+  '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tables': typeof AdminTablesRoute
+  '/admin/': typeof AdminIndexRoute
+  '/admin/orders/live': typeof AdminOrdersLiveRoute
+  '/admin/orders/': typeof AdminOrdersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/admin'
+    | '/menu'
+    | '/admin/analytics'
+    | '/admin/dashboard'
+    | '/admin/kitchen'
+    | '/admin/login'
+    | '/admin/menu'
+    | '/admin/settings'
+    | '/admin/tables'
+    | '/admin/'
+    | '/admin/orders/live'
+    | '/admin/orders/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/menu'
+    | '/admin/analytics'
+    | '/admin/dashboard'
+    | '/admin/kitchen'
+    | '/admin/login'
+    | '/admin/menu'
+    | '/admin/settings'
+    | '/admin/tables'
+    | '/admin'
+    | '/admin/orders/live'
+    | '/admin/orders'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/menu'
+    | '/admin/analytics'
+    | '/admin/dashboard'
+    | '/admin/kitchen'
+    | '/admin/login'
+    | '/admin/menu'
+    | '/admin/settings'
+    | '/admin/tables'
+    | '/admin/'
+    | '/admin/orders/live'
+    | '/admin/orders/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRouteWithChildren
+  MenuRoute: typeof MenuRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/menu': {
+      id: '/menu'
+      path: '/menu'
+      fullPath: '/menu'
+      preLoaderRoute: typeof MenuRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -48,11 +210,111 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/tables': {
+      id: '/admin/tables'
+      path: '/tables'
+      fullPath: '/admin/tables'
+      preLoaderRoute: typeof AdminTablesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/settings': {
+      id: '/admin/settings'
+      path: '/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminSettingsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/menu': {
+      id: '/admin/menu'
+      path: '/menu'
+      fullPath: '/admin/menu'
+      preLoaderRoute: typeof AdminMenuRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/kitchen': {
+      id: '/admin/kitchen'
+      path: '/kitchen'
+      fullPath: '/admin/kitchen'
+      preLoaderRoute: typeof AdminKitchenRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/dashboard': {
+      id: '/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AdminDashboardRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/analytics': {
+      id: '/admin/analytics'
+      path: '/analytics'
+      fullPath: '/admin/analytics'
+      preLoaderRoute: typeof AdminAnalyticsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/orders/': {
+      id: '/admin/orders/'
+      path: '/orders'
+      fullPath: '/admin/orders/'
+      preLoaderRoute: typeof AdminOrdersIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/orders/live': {
+      id: '/admin/orders/live'
+      path: '/orders/live'
+      fullPath: '/admin/orders/live'
+      preLoaderRoute: typeof AdminOrdersLiveRouteImport
+      parentRoute: typeof AdminRoute
+    }
   }
 }
 
+interface AdminRouteChildren {
+  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
+  AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminKitchenRoute: typeof AdminKitchenRoute
+  AdminLoginRoute: typeof AdminLoginRoute
+  AdminMenuRoute: typeof AdminMenuRoute
+  AdminSettingsRoute: typeof AdminSettingsRoute
+  AdminTablesRoute: typeof AdminTablesRoute
+  AdminIndexRoute: typeof AdminIndexRoute
+  AdminOrdersLiveRoute: typeof AdminOrdersLiveRoute
+  AdminOrdersIndexRoute: typeof AdminOrdersIndexRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminAnalyticsRoute: AdminAnalyticsRoute,
+  AdminDashboardRoute: AdminDashboardRoute,
+  AdminKitchenRoute: AdminKitchenRoute,
+  AdminLoginRoute: AdminLoginRoute,
+  AdminMenuRoute: AdminMenuRoute,
+  AdminSettingsRoute: AdminSettingsRoute,
+  AdminTablesRoute: AdminTablesRoute,
+  AdminIndexRoute: AdminIndexRoute,
+  AdminOrdersLiveRoute: AdminOrdersLiveRoute,
+  AdminOrdersIndexRoute: AdminOrdersIndexRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRouteWithChildren,
+  MenuRoute: MenuRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
