@@ -46,6 +46,9 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
   // Track scroll position for scroll rule
   const [scrollProgress, setScrollProgress] = useState(0);
 
+  // In-memory handled state to prevent immediate re-trigger on route changes during current page load
+  const [sessionHandledPromos, setSessionHandledPromos] = useState<Record<string, boolean>>({});
+
   // Set visited state
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -89,8 +92,10 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
 
   // Evaluate targeting and display rules
   useEffect(() => {
+    if (location.pathname.startsWith("/admin")) return;
     if (allPromotions.length === 0) {
       setActivePromotions([]);
+      setPopupQueue([]);
       return;
     }
 
@@ -121,6 +126,11 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
       // 1. Frequency Capping
       const dismissed = localStorage.getItem(`smoobuds_promo_dismissed_${promo.id}`);
       if (dismissed === "true") return false;
+
+      // Clicked or handled in this SPA session/context check
+      if (sessionHandledPromos[promo.id]) return false;
+      if (sessionStorage.getItem(`smoobuds_promo_session_${promo.id}`) === "true") return false;
+      if (sessionStorage.getItem(`smoobuds_promo_handled_${promo.id}`) === "true") return false;
 
       const oncePerDevice = promo.targeting?.oncePerDevice;
       if (oncePerDevice && localStorage.getItem(`smoobuds_promo_shown_${promo.id}`) === "true") {
@@ -167,7 +177,6 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
       const targetedCategories = promo.targeting?.categories || [];
       if (targetedCategories.length > 0) {
         const hasMatchingCategory = cartItems.some((ci) => targetedCategories.includes(ci.category));
-        // If not on menu and cart doesn't have it, don't show
         if (!hasMatchingCategory) return false;
       }
 
@@ -187,7 +196,7 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
       (promo) => promo.display_type.includes("popup_modal") || promo.display_type.includes("full_screen")
     );
     setPopupQueue(popups);
-  }, [allPromotions, location.pathname, scrollProgress]);
+  }, [allPromotions, location.pathname, sessionHandledPromos]);
 
   // Track scroll position
   useEffect(() => {
@@ -202,13 +211,16 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Process Popups triggering conditions
+  // Process Popups triggering conditions: Effect 1 (Non-scroll triggers)
   useEffect(() => {
     if (popupQueue.length === 0 || activePopup) return;
 
     const nextPromo = popupQueue[0];
     const trigger = nextPromo.display_rules?.trigger || "immediate";
     const delay = Number(nextPromo.display_rules?.delay) || 0;
+
+    // Skip scroll triggers, they are handled by Effect 2
+    if (trigger === "scroll") return;
 
     let timer: NodeJS.Timeout;
 
@@ -222,7 +234,10 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
       // Save display states for frequency caps
       localStorage.setItem(`smoobuds_promo_shown_${nextPromo.id}`, "true");
       localStorage.setItem(`smoobuds_promo_last_shown_${nextPromo.id}`, new Date().toISOString());
-      sessionStorage.setItem(`smoobuds_promo_session_${nextPromo.id}`, "true");
+      
+      if (nextPromo.display_rules?.oncePerSession) {
+        sessionStorage.setItem(`smoobuds_promo_session_${nextPromo.id}`, "true");
+      }
     };
 
     // Immediately trigger
@@ -232,13 +247,6 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
     // After delay
     else if (trigger === "delay") {
       timer = setTimeout(showPopup, (delay || 3) * 1000);
-    } 
-    // Scroll trigger
-    else if (trigger === "scroll") {
-      const targetScroll = Number(nextPromo.display_rules?.scrollPercent) || 30;
-      if (scrollProgress >= targetScroll) {
-        showPopup();
-      }
     } 
     // Exit intent trigger
     else if (trigger === "exit_intent") {
@@ -261,7 +269,41 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
       return () => window.removeEventListener(`smoobuds_${trigger}`, handleCartTrigger);
     }
 
-    return () => clearTimeout(timer);
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [popupQueue, activePopup]);
+
+  // Process Popups triggering conditions: Effect 2 (Scroll triggers)
+  useEffect(() => {
+    if (popupQueue.length === 0 || activePopup) return;
+
+    const nextPromo = popupQueue[0];
+    const trigger = nextPromo.display_rules?.trigger || "immediate";
+
+    // Only handle scroll triggers in this effect
+    if (trigger !== "scroll") return;
+
+    const showPopup = () => {
+      setActivePopup(nextPromo);
+      setPopupQueue((prev) => prev.slice(1));
+      
+      // Log View event to database
+      trackView(nextPromo.id);
+
+      // Save display states for frequency caps
+      localStorage.setItem(`smoobuds_promo_shown_${nextPromo.id}`, "true");
+      localStorage.setItem(`smoobuds_promo_last_shown_${nextPromo.id}`, new Date().toISOString());
+      
+      if (nextPromo.display_rules?.oncePerSession) {
+        sessionStorage.setItem(`smoobuds_promo_session_${nextPromo.id}`, "true");
+      }
+    };
+
+    const targetScroll = Number(nextPromo.display_rules?.scrollPercent) || 30;
+    if (scrollProgress >= targetScroll) {
+      showPopup();
+    }
   }, [popupQueue, activePopup, scrollProgress]);
 
   // DB View Tracker
@@ -297,14 +339,32 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
   };
 
   const dismissPromotion = (id: string) => {
-    if (activePopup?.id === id) {
-      const neverShowAgain = activePopup.display_rules?.neverShowAgainAfterClose;
-      if (neverShowAgain) {
-        localStorage.setItem(`smoobuds_promo_dismissed_${id}`, "true");
-      }
+    const isPopup = activePopup?.id === id;
+    const promo = isPopup ? activePopup : allPromotions.find((p) => p.id === id);
+
+    if (!promo) return;
+
+    // Always mark as handled locally and in session storage to prevent immediate re-trigger on route changes
+    setSessionHandledPromos((prev) => ({ ...prev, [id]: true }));
+    sessionStorage.setItem(`smoobuds_promo_handled_${id}`, "true");
+
+    // Apply frequency rules
+    const neverShowAgain = promo.display_rules?.neverShowAgainAfterClose;
+    const oncePerDevice = promo.targeting?.oncePerDevice;
+    const oncePerDay = promo.display_rules?.oncePerDay;
+    const oncePerSession = promo.display_rules?.oncePerSession;
+
+    if (oncePerDevice || neverShowAgain) {
+      localStorage.setItem(`smoobuds_promo_dismissed_${id}`, "true");
+    } else if (oncePerDay) {
+      localStorage.setItem(`smoobuds_promo_last_shown_${id}`, new Date().toISOString());
+    } else if (oncePerSession) {
+      sessionStorage.setItem(`smoobuds_promo_session_${id}`, "true");
+    }
+
+    if (isPopup) {
       setActivePopup(null);
     } else {
-      localStorage.setItem(`smoobuds_promo_dismissed_${id}`, "true");
       setActivePromotions((prev) => prev.filter((p) => p.id !== id));
     }
   };
@@ -314,6 +374,24 @@ export function PromotionsProvider({ children }: { children: ReactNode }) {
     // Cache clicked promotion so we can link it during checkout order creation
     localStorage.setItem("smoobuds_applied_promo_id", promo.id);
     
+    // Always mark as handled locally and in session storage to prevent reopening in the same session
+    setSessionHandledPromos((prev) => ({ ...prev, [promo.id]: true }));
+    sessionStorage.setItem(`smoobuds_promo_handled_${promo.id}`, "true");
+
+    // Apply frequency rules
+    const oncePerDevice = promo.targeting?.oncePerDevice;
+    const oncePerDay = promo.display_rules?.oncePerDay;
+    const oncePerSession = promo.display_rules?.oncePerSession;
+    const neverShowAgain = promo.display_rules?.neverShowAgainAfterClose;
+
+    if (oncePerDevice || neverShowAgain) {
+      localStorage.setItem(`smoobuds_promo_dismissed_${promo.id}`, "true");
+    } else if (oncePerDay) {
+      localStorage.setItem(`smoobuds_promo_last_shown_${promo.id}`, new Date().toISOString());
+    } else if (oncePerSession) {
+      sessionStorage.setItem(`smoobuds_promo_session_${promo.id}`, "true");
+    }
+
     // Close modal if popup
     if (activePopup?.id === promo.id) {
       setActivePopup(null);
