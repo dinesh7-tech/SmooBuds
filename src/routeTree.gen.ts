@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as AdminTablesRouteImport } from './routes/admin/tables'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
+import { Route as AdminPromotionsRouteImport } from './routes/admin/promotions'
 import { Route as AdminMenuRouteImport } from './routes/admin/menu'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminKitchenRouteImport } from './routes/admin/kitchen'
@@ -51,6 +52,11 @@ const AdminTablesRoute = AdminTablesRouteImport.update({
 const AdminSettingsRoute = AdminSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminPromotionsRoute = AdminPromotionsRouteImport.update({
+  id: '/promotions',
+  path: '/promotions',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminMenuRoute = AdminMenuRouteImport.update({
@@ -98,6 +104,7 @@ export interface FileRoutesByFullPath {
   '/admin/kitchen': typeof AdminKitchenRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/menu': typeof AdminMenuRoute
+  '/admin/promotions': typeof AdminPromotionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
   '/admin/': typeof AdminIndexRoute
@@ -112,6 +119,7 @@ export interface FileRoutesByTo {
   '/admin/kitchen': typeof AdminKitchenRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/menu': typeof AdminMenuRoute
+  '/admin/promotions': typeof AdminPromotionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
   '/admin': typeof AdminIndexRoute
@@ -128,6 +136,7 @@ export interface FileRoutesById {
   '/admin/kitchen': typeof AdminKitchenRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/menu': typeof AdminMenuRoute
+  '/admin/promotions': typeof AdminPromotionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
   '/admin/': typeof AdminIndexRoute
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/admin/kitchen'
     | '/admin/login'
     | '/admin/menu'
+    | '/admin/promotions'
     | '/admin/settings'
     | '/admin/tables'
     | '/admin/'
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/admin/kitchen'
     | '/admin/login'
     | '/admin/menu'
+    | '/admin/promotions'
     | '/admin/settings'
     | '/admin/tables'
     | '/admin'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/admin/kitchen'
     | '/admin/login'
     | '/admin/menu'
+    | '/admin/promotions'
     | '/admin/settings'
     | '/admin/tables'
     | '/admin/'
@@ -229,6 +241,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/admin/settings'
       preLoaderRoute: typeof AdminSettingsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/promotions': {
+      id: '/admin/promotions'
+      path: '/promotions'
+      fullPath: '/admin/promotions'
+      preLoaderRoute: typeof AdminPromotionsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/menu': {
@@ -289,6 +308,7 @@ interface AdminRouteChildren {
   AdminKitchenRoute: typeof AdminKitchenRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMenuRoute: typeof AdminMenuRoute
+  AdminPromotionsRoute: typeof AdminPromotionsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTablesRoute: typeof AdminTablesRoute
   AdminIndexRoute: typeof AdminIndexRoute
@@ -302,6 +322,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminKitchenRoute: AdminKitchenRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMenuRoute: AdminMenuRoute,
+  AdminPromotionsRoute: AdminPromotionsRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminTablesRoute: AdminTablesRoute,
   AdminIndexRoute: AdminIndexRoute,

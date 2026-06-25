@@ -16,7 +16,8 @@ import {
   ChefHat,
   Shield,
   Menu,
-  X
+  X,
+  Megaphone
 } from "lucide-react";
 import { toast } from "sonner";
 import { AdminContext } from "../lib/adminContext";
@@ -237,6 +238,7 @@ function AdminLayout() {
     { label: "Menu Catalog", icon: MenuIcon, href: "/admin/menu", roles: ["Owner", "Manager"] },
     { label: "Tables & QR", icon: QrCode, href: "/admin/tables", roles: ["Owner"] },
     { label: "Analytics", icon: BarChart3, href: "/admin/analytics", roles: ["Owner", "Manager"] },
+    { label: "Promotions", icon: Megaphone, href: "/admin/promotions", roles: ["Owner", "Manager"] },
     { label: "Cafe Settings", icon: SettingsIcon, href: "/admin/settings", roles: ["Owner", "Manager"] },
   ];
 

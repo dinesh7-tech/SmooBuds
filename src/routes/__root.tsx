@@ -10,6 +10,7 @@ import {
 import { type ReactNode } from "react";
 import { Toaster } from "sonner";
 import appCss from "../styles.css?url";
+import { PromotionsProvider } from "@/components/promotions/PromotionsEngine";
 
 function NotFoundComponent() {
   return (
@@ -126,8 +127,10 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
-      <Toaster position="top-right" richColors />
+      <PromotionsProvider>
+        <Outlet />
+        <Toaster position="top-right" richColors />
+      </PromotionsProvider>
     </QueryClientProvider>
   );
 }

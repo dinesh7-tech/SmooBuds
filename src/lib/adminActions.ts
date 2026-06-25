@@ -621,3 +621,294 @@ export const updateCafeSettingsFn = createServerFn({ method: "POST" })
     await createAuditLog(userId, "Settings Change", payload, authClient);
     return { success: true };
   });
+
+// 6. PROMOTIONS & CAMPAIGNS SCHEMAS & FUNCTIONS
+const promotionInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  title: z.string().min(1, "Title is required").max(100),
+  subtitle: z.string().max(100).optional().nullable(),
+  description: z.string().max(1000).optional().nullable(),
+  imageUrl: z.string().url().or(z.literal("")).optional().nullable(),
+  bannerUrl: z.string().url().or(z.literal("")).optional().nullable(),
+  ctaText: z.string().max(50).default("Order Now"),
+  ctaUrl: z.string().max(200).default("/menu"),
+  displayType: z.array(z.string()).min(1, "At least one display type is required"),
+  animationType: z.string().default("fade"),
+  animationDuration: z.string().default("0.5s"),
+  startDate: z.string().optional().nullable(),
+  endDate: z.string().optional().nullable(),
+  startTime: z.string().optional().nullable(),
+  endTime: z.string().optional().nullable(),
+  timezone: z.string().default("UTC"),
+  targeting: z.record(z.any()).default({}),
+  displayRules: z.record(z.any()).default({}),
+  offerType: z.string().default("custom"),
+  status: z.enum(["Draft", "Scheduled", "Active", "Paused", "Expired", "Archived"]).default("Draft"),
+});
+
+export const savePromotionFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      payload: promotionInputSchema,
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      console.log("SERVER_ACTION_STARTED", "savePromotionFn");
+      const { payload, token } = data;
+      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const authClient = createAuthClient(token);
+      const isUpdate = !!payload.id;
+      let response;
+
+      const dbPayload = {
+        title: payload.title,
+        subtitle: payload.subtitle || null,
+        description: payload.description || null,
+        image_url: payload.imageUrl || null,
+        banner_url: payload.bannerUrl || null,
+        cta_text: payload.ctaText,
+        cta_url: payload.ctaUrl,
+        display_type: payload.displayType,
+        animation_type: payload.animationType,
+        animation_duration: payload.animationDuration,
+        start_date: payload.startDate || null,
+        end_date: payload.endDate || null,
+        start_time: payload.startTime || null,
+        end_time: payload.endTime || null,
+        timezone: payload.timezone,
+        targeting: payload.targeting,
+        display_rules: payload.displayRules,
+        offer_type: payload.offerType,
+        status: payload.status,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (isUpdate) {
+        const { data: updated, error } = await authClient
+          .from("promotions")
+          .update(dbPayload)
+          .eq("id", payload.id)
+          .select()
+          .single();
+
+        if (error) throw new Error(error.message);
+        response = updated;
+        await createAuditLog(userId, "Promotion Update", { id: payload.id, title: payload.title }, authClient);
+      } else {
+        const { data: created, error } = await authClient
+          .from("promotions")
+          .insert({
+            ...dbPayload,
+            created_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (error) throw new Error(error.message);
+        response = created;
+        await createAuditLog(userId, "Promotion Create", { id: created.id, title: payload.title }, authClient);
+      }
+
+      return { success: true, promotion: response };
+    } catch (error: any) {
+      console.error("savePromotionFn error:", error);
+      throw new Error(error.message || "Failed to save promotion.");
+    }
+  });
+
+export const deletePromotionFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      id: z.string().uuid(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      console.log("SERVER_ACTION_STARTED", "deletePromotionFn");
+      const { id, token } = data;
+      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const authClient = createAuthClient(token);
+
+      const { data: item } = await authClient
+        .from("promotions")
+        .select("title")
+        .eq("id", id)
+        .single();
+
+      const { error } = await authClient
+        .from("promotions")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw new Error(error.message);
+
+      await createAuditLog(userId, "Promotion Delete", { id, title: item?.title || "Unknown" }, authClient);
+      return { success: true };
+    } catch (error: any) {
+      console.error("deletePromotionFn error:", error);
+      throw new Error(error.message || "Failed to delete promotion.");
+    }
+  });
+
+export const duplicatePromotionFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      id: z.string().uuid(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      console.log("SERVER_ACTION_STARTED", "duplicatePromotionFn");
+      const { id, token } = data;
+      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const authClient = createAuthClient(token);
+
+      const { data: original, error: fetchError } = await authClient
+        .from("promotions")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (fetchError || !original) throw new Error("Promotion not found.");
+
+      const clonePayload = {
+        title: `Copy of ${original.title}`,
+        subtitle: original.subtitle,
+        description: original.description,
+        image_url: original.image_url,
+        banner_url: original.banner_url,
+        cta_text: original.cta_text,
+        cta_url: original.cta_url,
+        display_type: original.display_type,
+        animation_type: original.animation_type,
+        animation_duration: original.animation_duration,
+        start_date: original.start_date,
+        end_date: original.end_date,
+        start_time: original.start_time,
+        end_time: original.end_time,
+        timezone: original.timezone,
+        targeting: original.targeting,
+        display_rules: original.display_rules,
+        offer_type: original.offer_type,
+        status: "Draft",
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: duplicated, error: insertError } = await authClient
+        .from("promotions")
+        .insert(clonePayload)
+        .select()
+        .single();
+
+      if (insertError) throw new Error(insertError.message);
+
+      await createAuditLog(userId, "Promotion Duplicate", { originalId: id, newId: duplicated.id, title: clonePayload.title }, authClient);
+      return { success: true, promotion: duplicated };
+    } catch (error: any) {
+      console.error("duplicatePromotionFn error:", error);
+      throw new Error(error.message || "Failed to duplicate promotion.");
+    }
+  });
+
+export const togglePromotionStatusFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      id: z.string().uuid(),
+      status: z.enum(["Draft", "Scheduled", "Active", "Paused", "Expired", "Archived"]),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      console.log("SERVER_ACTION_STARTED", "togglePromotionStatusFn");
+      const { id, status, token } = data;
+      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const authClient = createAuthClient(token);
+
+      const { error } = await authClient
+        .from("promotions")
+        .update({ status, updated_at: new Date().toISOString() })
+        .eq("id", id);
+
+      if (error) throw new Error(error.message);
+
+      await createAuditLog(userId, "Promotion Status Change", { id, status }, authClient);
+      return { success: true };
+    } catch (error: any) {
+      console.error("togglePromotionStatusFn error:", error);
+      throw new Error(error.message || "Failed to update promotion status.");
+    }
+  });
+
+export const uploadPromotionAssetFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z.object({
+      payload: uploadInputSchema,
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      console.log("SERVER_ACTION_STARTED", "uploadPromotionAssetFn");
+      const { payload, token } = data;
+      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+
+      // Validate MIME type
+      const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowedMimeTypes.includes(payload.contentType)) {
+        throw new Error("Invalid file type. Only JPG, PNG, and WEBP are allowed.");
+      }
+
+      // Extract Base64 Data
+      const base64Data = payload.base64File.replace(/^data:image\/\w+;base64,/, "");
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      // Validate Size (< 5MB)
+      if (buffer.length > 5 * 1024 * 1024) {
+        throw new Error("File size must be less than 5MB.");
+      }
+
+      // Validate Magic Bytes
+      const hex = buffer.subarray(0, 4).toString('hex').toLowerCase();
+      let isValidImage = false;
+      if (hex.startsWith('ffd8ffe0') || hex.startsWith('ffd8ffe1') || hex.startsWith('ffd8ffe2')) isValidImage = true;
+      if (hex.startsWith('89504e47')) isValidImage = true;
+      if (hex.startsWith('52494646')) isValidImage = true;
+      
+      if (!isValidImage) {
+        throw new Error("File content is not a valid image.");
+      }
+
+      const authClient = createAuthClient(token);
+      
+      const extension = payload.fileName.split('.').pop()?.replace(/[^a-zA-Z0-9]/g, '') || 'jpg';
+      const safeFileName = `promo_${Date.now()}_${Math.random().toString(36).substring(7)}.${extension}`;
+      const filePath = `assets/${safeFileName}`;
+
+      const { data: uploadData, error: uploadError } = await authClient.storage
+        .from('promotion-assets')
+        .upload(filePath, buffer, {
+          contentType: payload.contentType,
+          upsert: false
+        });
+
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      const { data: publicUrlData } = authClient.storage
+        .from('promotion-assets')
+        .getPublicUrl(uploadData.path);
+
+      await createAuditLog(userId, "Promotion Image Uploaded", { filePath: uploadData.path }, authClient);
+
+      return { success: true, url: publicUrlData.publicUrl };
+    } catch (error: any) {
+      console.error("uploadPromotionAssetFn error:", error);
+      throw new Error(error.message || "Failed to upload promotion asset.");
+    }
+  });

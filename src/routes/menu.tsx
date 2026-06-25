@@ -24,6 +24,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { placeOrderFn, submitTableRequestFn, verifyMenuAccessFn, fetchSessionOrdersFn } from "@/lib/orderActions";
 import { toast } from "sonner";
+import { MenuPagePromotionBanner, CheckoutPromotionBanner } from "@/components/promotions/PromotionsEngine";
 
 // 1. Zod Search Params Schema
 const menuSearchSchema = z.object({
@@ -284,6 +285,19 @@ function MenuPage() {
     fetchSessionOrdersFn().then((data) => setSessionOrders(data));
   }, [isVerified]);
 
+  // Promotions triggers
+  useEffect(() => {
+    if (isCartOpen) {
+      window.dispatchEvent(new CustomEvent("smoobuds_cart_open"));
+    }
+  }, [isCartOpen]);
+
+  useEffect(() => {
+    if (cart.length > 0) {
+      window.dispatchEvent(new CustomEvent("smoobuds_item_added"));
+    }
+  }, [cart.length]);
+
   useEffect(() => {
     if (!isVerified || !tableNumber) return;
 
@@ -392,11 +406,13 @@ function MenuPage() {
         notes: getCompiledNotes(item),
       }));
 
-      console.log("CALLING_PLACE_ORDER_FN");
+      const promoId = localStorage.getItem("smoobuds_applied_promo_id");
+      console.log("CALLING_PLACE_ORDER_FN", { promoId });
       const response = await placeOrderFn({
         data: {
           items: itemsPayload,
           idempotencyKey,
+          appliedPromotionId: promoId || undefined,
         },
       });
 
@@ -409,6 +425,7 @@ function MenuPage() {
         if (cartLocalStorageKey) {
           localStorage.removeItem(cartLocalStorageKey);
         }
+        localStorage.removeItem("smoobuds_applied_promo_id");
 
         setIdempotencyKey(generateUUID());
         setIsCartOpen(false);
@@ -571,6 +588,8 @@ function MenuPage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <MenuPagePromotionBanner />
 
         {/* Filters */}
         <div className="flex flex-col gap-4 mb-6 sm:mb-8 sticky top-[72px] sm:top-[76px] z-30 bg-cream/95 backdrop-blur-xl py-3 -mx-4 px-4 sm:mx-0 sm:px-0 border-b sm:border-none border-sage/5">
@@ -824,8 +843,10 @@ function MenuPage() {
                     <p className="font-display font-bold">Your cart is empty.</p>
                   </div>
                 ) : (
-                  cart.map((item) => (
-                    <div key={item.id} className="bg-white/60 border border-sage/10 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
+                  <>
+                    <CheckoutPromotionBanner />
+                    {cart.map((item) => (
+                      <div key={item.id} className="bg-white/60 border border-sage/10 rounded-3xl p-4 sm:p-5 shadow-sm space-y-4">
                       <div className="flex justify-between items-start gap-4">
                         <div className="flex-1">
                           <h4 className="font-display font-extrabold text-base text-sage-deep leading-tight mb-1">{item.name}</h4>
@@ -894,7 +915,8 @@ function MenuPage() {
                         />
                       </div>
                     </div>
-                  ))
+                    ))}
+                  </>
                 )}
               </div>
 

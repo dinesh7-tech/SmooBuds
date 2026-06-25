@@ -40,6 +40,7 @@ export const orderItemInputSchema = z.object({
 export const orderSubmissionSchema = z.object({
   items: z.array(orderItemInputSchema).min(1, { message: "Cart cannot be empty" }),
   idempotencyKey: z.string().uuid({ message: "Invalid idempotency key format" }),
+  appliedPromotionId: z.string().uuid({ message: "Invalid promotion ID format" }).optional().nullable(),
 });
 
 export const requestSubmissionSchema = z.object({
@@ -211,7 +212,7 @@ export const placeOrderFn = createServerFn({ method: "POST" })
     const { tableNumber } = getTableSessionFromRequest(request);
     console.log("SESSION_VALIDATED");
 
-    const { items, idempotencyKey } = data;
+    const { items, idempotencyKey, appliedPromotionId } = data;
 
     // 1. Check if order with this idempotency key already exists (Duplicate Protection)
     const { data: existingOrder, error: checkError } = await supabase
@@ -281,6 +282,7 @@ export const placeOrderFn = createServerFn({ method: "POST" })
         total_amount: totalAmount,
         status: "Pending",
         idempotency_key: idempotencyKey,
+        applied_promotion_id: appliedPromotionId || null,
       })
       .select("id")
       .single();
