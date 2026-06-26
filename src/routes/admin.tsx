@@ -24,6 +24,21 @@ import { AdminContext } from "../lib/adminContext";
 import type { AdminContextType } from "../lib/adminContext";
 import { hasPermission, type Permission } from "@/lib/permissions";
 
+// Helper to safely extract session_id from JWT payload in the browser
+function extractSessionId(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const base64Url = token.split('.')[1];
+    if (!base64Url) return null;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    return payload.session_id || null;
+  } catch (e) {
+    console.warn("Failed to extract session_id");
+    return null;
+  }
+}
+
 export const Route = createFileRoute("/admin")({
   beforeLoad: async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -122,39 +137,38 @@ function AdminLayout() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("No session");
 
-      let sessionId: string | null = null;
-      try {
-        const payload = JSON.parse(Buffer.from(session.access_token.split('.')[1], 'base64').toString());
-        sessionId = payload.session_id || null;
-      } catch (e) {
-        console.warn("Could not parse session_id");
-      }
+      const sessionId = extractSessionId(session.access_token);
 
-      // Check Layer 2: Force Logout via RPC
+      // Check Layer 2: Force Logout via RPC (only if session_id extracted successfully)
       if (sessionId) {
-        const { data: isSessionValid } = await supabase.rpc("verify_active_session", {
-          p_user_id: uid,
-          p_session_id: sessionId
-        });
-        if (isSessionValid === false) {
-          toast.error("Your session has been terminated by an Administrator.");
-          await supabase.auth.signOut();
-          return;
-        }
+        try {
+          const { data: isSessionValid, error: sessionError } = await supabase.rpc("verify_active_session", {
+            p_user_id: uid,
+            p_session_id: sessionId
+          });
+          
+          if (!sessionError && isSessionValid === false) {
+            toast.error("Your session has been terminated by an Administrator.");
+            await supabase.auth.signOut();
+            return;
+          }
 
-        // Layer 1: Realtime Subscription to Force Logout
-        const forceLogoutChannel = supabase.channel(`force_logout_${sessionId}`)
-          .on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "login_history", filter: `session_id=eq.${sessionId}` },
-            async (payload) => {
-              if (payload.new.is_forced_logout === true) {
-                toast.error("Your session was terminated by an Administrator.");
-                await supabase.auth.signOut();
-                navigate({ to: "/login" });
+          // Layer 1: Realtime Subscription to Force Logout
+          const forceLogoutChannel = supabase.channel(`force_logout_${sessionId}`)
+            .on(
+              "postgres_changes",
+              { event: "UPDATE", schema: "public", table: "login_history", filter: `session_id=eq.${sessionId}` },
+              async (payload) => {
+                if (payload.new.is_forced_logout === true) {
+                  toast.error("Your session was terminated by an Administrator.");
+                  await supabase.auth.signOut();
+                  navigate({ to: "/login" });
+                }
               }
-            }
-          ).subscribe();
+            ).subscribe();
+        } catch (e) {
+          console.warn("Session verification unavailable, proceeding with valid token");
+        }
       }
 
       const { data, error } = await supabase

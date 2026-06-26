@@ -4,6 +4,21 @@ import { supabase } from "@/lib/supabase";
 import { ChefHat, Shield, Mail, Lock, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
+// Helper to safely extract session_id from JWT payload in the browser
+function extractSessionId(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const base64Url = token.split('.')[1];
+    if (!base64Url) return null;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    return payload.session_id || null;
+  } catch (e) {
+    console.warn("Failed to extract session_id");
+    return null;
+  }
+}
+
 export const Route = createFileRoute("/login")({
   component: LoginRoute,
 });
@@ -93,13 +108,15 @@ function LoginRoute() {
       }
 
       // 5. Record successful login
+      const sessionId = extractSessionId(data.session?.access_token);
       await supabase.rpc("record_login_attempt", {
         p_email: email, 
         p_success: true, 
         p_device: navigator.userAgent, 
         p_browser: navigator.vendor || "Unknown", 
         p_ip: "Client", 
-        p_secret: "smoobuds_internal_rpc_secret_2026"
+        p_secret: "smoobuds_internal_rpc_secret_2026",
+        p_session_id: sessionId
       });
 
       // 6. Redirect to /admin

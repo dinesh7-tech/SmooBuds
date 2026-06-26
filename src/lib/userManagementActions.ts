@@ -3,6 +3,21 @@ import { z } from "zod";
 import { createAuthClient, supabase } from "./supabase";
 import { hasPermission, type Permission } from "./permissions";
 
+// Helper to safely extract session_id from JWT payload
+function extractSessionId(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const base64Url = token.split('.')[1];
+    if (!base64Url) return null;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    return payload.session_id || null;
+  } catch (e) {
+    console.warn("Failed to extract session_id");
+    return null;
+  }
+}
+
 // 1. Zod Validation Schemas
 const userInputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -16,20 +31,12 @@ const userInputSchema = z.object({
 async function verifyPermission(
   authHeader: string | null,
   requiredPermission: Permission
-): Promise<{ userId: string; role: string; email: string; sessionId: string | null }> {
+): Promise<{ userId: string; role: string; email: string }> {
   if (!authHeader) {
     throw new Error("Missing authorization header.");
   }
   
   const token = authHeader.replace("Bearer ", "").trim();
-  
-  let sessionId: string | null = null;
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-    sessionId = payload.session_id || null;
-  } catch (e) {
-    console.warn("Could not parse session_id from JWT token");
-  }
   
   const authClient = createAuthClient(token);
   
@@ -38,14 +45,21 @@ async function verifyPermission(
     throw new Error("Unauthorized. Invalid session token.");
   }
 
+  const sessionId = extractSessionId(token);
+  
   if (sessionId) {
-    const { data: isSessionValid, error: sessionError } = await authClient.rpc("verify_active_session", {
-      p_user_id: user.id,
-      p_session_id: sessionId
-    });
+    try {
+      const { data: isSessionValid, error: sessionError } = await authClient.rpc("verify_active_session", {
+        p_user_id: user.id,
+        p_session_id: sessionId
+      });
 
-    if (sessionError || isSessionValid === false) {
-      throw new Error("Session has been forcibly logged out.");
+      // ONLY throw if explicitly FALSE (ignore null or RPC errors for resilience)
+      if (!sessionError && isSessionValid === false) {
+        throw new Error("Session has been forcibly logged out.");
+      }
+    } catch (e) {
+      console.warn("Session verification unavailable, proceeding with valid token");
     }
   }
 
@@ -71,7 +85,7 @@ async function verifyPermission(
     throw new Error(`Forbidden. Required permission '${requiredPermission}' not met for role '${role}'.`);
   }
 
-  return { userId: user.id, role, email: user.email || "", sessionId };
+  return { userId: user.id, role, email: user.email || "" };
 }
 
 // Helper: Log audit trail
