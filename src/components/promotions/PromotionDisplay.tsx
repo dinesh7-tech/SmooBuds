@@ -14,6 +14,14 @@ export interface Promotion {
   animation_type: string;
   animation_duration: string;
   offer_type: string;
+  status?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  timezone?: string;
+  targeting?: any;
+  display_rules?: any;
 }
 
 interface PromotionDisplayProps {
@@ -126,11 +134,11 @@ export function PromotionDisplay({ promotion, location, onClose, onCtaClick, pre
 
         {/* Modal content */}
         <motion.div
-          variants={animationVariants}
+          variants={animationVariants as any}
           initial="initial"
           animate="animate"
           exit="exit"
-          transition={transition}
+          transition={transition as any}
           className="bg-cream border border-sage/15 rounded-3xl shadow-luxe max-w-md w-full overflow-hidden relative z-10 flex flex-col"
         >
           {/* Close button */}
@@ -209,11 +217,11 @@ export function PromotionDisplay({ promotion, location, onClose, onCtaClick, pre
 
         {/* Content body */}
         <motion.div
-          variants={animationVariants}
+          variants={animationVariants as any}
           initial="initial"
           animate="animate"
           exit="exit"
-          transition={transition}
+          transition={transition as any}
           className="max-w-2xl mx-auto flex flex-col lg:flex-row items-center gap-8 lg:gap-12 py-6 my-auto"
         >
           {image_url && (

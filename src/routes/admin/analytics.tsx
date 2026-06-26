@@ -793,7 +793,7 @@ function AnalyticsDashboardPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={stats.categoryRevenue} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="count" nameKey="category">
-                      {stats.categoryRevenue.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                      {stats.categoryRevenue.map((_: any, index: number) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                     </Pie>
                     <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
                   </PieChart>
@@ -804,7 +804,7 @@ function AnalyticsDashboardPage() {
             </div>
             <div className="w-full sm:w-1/2 overflow-y-auto max-h-[220px] no-scrollbar">
               <ul className="space-y-3">
-                {stats.categoryRevenue.map((cat, idx) => (
+                {stats.categoryRevenue.map((cat: any, idx: number) => (
                   <li key={cat.category} className="flex justify-between items-center text-xs py-2 border-b border-sage/5 last:border-0">
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
@@ -866,7 +866,7 @@ function AnalyticsDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-sage/5">
-                {stats.topSellingItems.map((item, idx) => (
+                {stats.topSellingItems.map((item: any, idx: number) => (
                   <tr key={item.name} className="hover:bg-sage/5 transition-colors group">
                     <td className="px-4 py-2.5 text-center w-12">
                       <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold font-display ${idx < 3 ? 'bg-gold/20 text-gold-dark' : 'bg-sage/10 text-sage'}`}>

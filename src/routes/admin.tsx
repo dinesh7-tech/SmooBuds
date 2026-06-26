@@ -22,15 +22,14 @@ import {
 import { toast } from "sonner";
 import { AdminContext } from "../lib/adminContext";
 import type { AdminContextType } from "../lib/adminContext";
+import { hasPermission, type Permission } from "@/lib/permissions";
 
 export const Route = createFileRoute("/admin")({
-  beforeLoad: async ({ location }) => {
-    if (location.pathname === "/admin/login") return;
-
+  beforeLoad: async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
       throw redirect({
-        to: "/admin/login",
+        to: "/login",
       });
     }
   },
@@ -40,7 +39,6 @@ export const Route = createFileRoute("/admin")({
 function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isLoginPage = location.pathname === "/admin/login";
 
   // Auth & Role states
   const [userId, setUserId] = useState<string | null>(null);
@@ -109,38 +107,88 @@ function AdminLayout() {
         setRole(null);
         setSessionToken(null);
         setLoading(false);
-        if (!isLoginPage) {
-          navigate({ to: "/admin/login" });
-        }
+        navigate({ to: "/login" });
       }
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [isLoginPage]);
+  }, []);
 
-  // 2. Fetch User Role from database
+  // 2. Fetch User Role & Status from database
   const fetchUserRole = async (uid: string) => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("No session");
+
+      let sessionId: string | null = null;
+      try {
+        const payload = JSON.parse(Buffer.from(session.access_token.split('.')[1], 'base64').toString());
+        sessionId = payload.session_id || null;
+      } catch (e) {
+        console.warn("Could not parse session_id");
+      }
+
+      // Check Layer 2: Force Logout via RPC
+      if (sessionId) {
+        const { data: isSessionValid } = await supabase.rpc("verify_active_session", {
+          p_user_id: uid,
+          p_session_id: sessionId
+        });
+        if (isSessionValid === false) {
+          toast.error("Your session has been terminated by an Administrator.");
+          await supabase.auth.signOut();
+          return;
+        }
+
+        // Layer 1: Realtime Subscription to Force Logout
+        const forceLogoutChannel = supabase.channel(`force_logout_${sessionId}`)
+          .on(
+            "postgres_changes",
+            { event: "UPDATE", schema: "public", table: "login_history", filter: `session_id=eq.${sessionId}` },
+            async (payload) => {
+              if (payload.new.is_forced_logout === true) {
+                toast.error("Your session was terminated by an Administrator.");
+                await supabase.auth.signOut();
+                navigate({ to: "/login" });
+              }
+            }
+          ).subscribe();
+      }
+
       const { data, error } = await supabase
         .from("user_roles")
-        .select("role")
+        .select("role, status, locked_until")
         .eq("user_id", uid)
         .maybeSingle();
 
       if (error) throw error;
 
       if (data) {
+        // Enforce strict lock / status checks client-side for immediate UX feedback
+        if (data.status === "Pending" || data.status === "Inactive" || data.status === "Suspended") {
+          toast.error(`Account is ${data.status}. Access denied.`);
+          await supabase.auth.signOut();
+          return;
+        }
+        
+        if (data.locked_until && new Date(data.locked_until) > new Date()) {
+          toast.error("Account is temporarily locked.");
+          await supabase.auth.signOut();
+          return;
+        }
+
         setRole(data.role as "Owner" | "Manager" | "Staff");
       } else {
-        // Fallback for first admin setup (If no roles table row exists, default to Staff so they aren't locked out of orders)
-        // In production, the DB admin pre-configures this, but this is user-friendly for dev
-        setRole("Staff");
+        // Unrecognized user.
+        toast.error("Unauthorized email.");
+        await supabase.auth.signOut();
+        setRole(null);
       }
     } catch (err) {
       console.error("Failed to fetch user role:", err);
-      setRole("Staff");
+      setRole(null);
     } finally {
       console.log("[ADMIN_AUTH] LOADING_FALSE — auth fully resolved");
       setLoading(false);
@@ -149,7 +197,7 @@ function AdminLayout() {
 
   // 3. Load active requests (Waiter calls, Bill requests)
   useEffect(() => {
-    if (!userId || isLoginPage) return;
+    if (!userId) return;
 
     const loadRequests = async () => {
       const { data } = await supabase
@@ -190,7 +238,7 @@ function AdminLayout() {
     return () => {
       supabase.removeChannel(requestChannel);
     };
-  }, [userId, isLoginPage, soundEnabled]);
+  }, [userId, soundEnabled]);
 
   // Resolve Table Request
   const resolveRequest = async (id: string) => {
@@ -209,37 +257,35 @@ function AdminLayout() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     toast.success("Successfully logged out");
-    navigate({ to: "/admin/login" });
+    navigate({ to: "/login" });
   };
 
-  // If on login route, render sub-component without sidebar layout
-  // Always mount AdminContext.Provider so useAdmin() never throws in children
-  if (isLoginPage) {
+  if (loading) {
     return (
       <AdminContext.Provider value={{ userId, role, sessionToken, authLoading: loading, soundEnabled, setSoundEnabled, pendingRequestsCount }}>
-        {loading ? (
-          <div className="min-h-screen bg-cream flex flex-col items-center justify-center text-sage">
-            <ChefHat className="animate-spin mb-4" size={40} />
-            <p className="font-display text-xs uppercase tracking-widest font-semibold">Verifying credentials...</p>
-          </div>
-        ) : (
-          <Outlet />
-        )}
+        <div className="min-h-screen bg-cream flex flex-col items-center justify-center text-sage">
+          <ChefHat className="animate-spin mb-4" size={40} />
+          <p className="font-display text-xs uppercase tracking-widest font-semibold">Verifying credentials...</p>
+        </div>
       </AdminContext.Provider>
     );
   }
 
 
-  // Define Nav links based on Role
-  const navLinks = [
-    { label: "Live Orders", icon: ShoppingBag, href: "/admin/orders/live", roles: ["Owner", "Manager", "Staff"] },
-    { label: "Order History", icon: Bell, href: "/admin/orders", roles: ["Owner", "Manager", "Staff"] },
-    { label: "Kitchen Board", icon: ChefHat, href: "/admin/kitchen", roles: ["Owner", "Manager", "Staff"] },
-    { label: "Menu Catalog", icon: MenuIcon, href: "/admin/menu", roles: ["Owner", "Manager"] },
-    { label: "Tables & QR", icon: QrCode, href: "/admin/tables", roles: ["Owner"] },
-    { label: "Analytics", icon: BarChart3, href: "/admin/analytics", roles: ["Owner", "Manager"] },
-    { label: "Promotions", icon: Megaphone, href: "/admin/promotions", roles: ["Owner", "Manager"] },
-    { label: "Cafe Settings", icon: SettingsIcon, href: "/admin/settings", roles: ["Owner", "Manager"] },
+  // Define Nav links mapped to Permissions
+  const navLinks: { label: string; icon: any; href: string; permission: Permission }[] = [
+    { label: "Live Orders", icon: ShoppingBag, href: "/admin/orders/live", permission: "Orders.View" },
+    { label: "Order History", icon: Bell, href: "/admin/orders", permission: "Orders.View" },
+    { label: "Kitchen Board", icon: ChefHat, href: "/admin/kitchen", permission: "Kitchen.View" },
+    { label: "Menu Catalog", icon: MenuIcon, href: "/admin/menu", permission: "Menu.View" },
+    { label: "Tables & QR", icon: QrCode, href: "/admin/tables", permission: "Tables.View" },
+    { label: "Analytics", icon: BarChart3, href: "/admin/analytics", permission: "Analytics.View" },
+    { label: "Promotions", icon: Megaphone, href: "/admin/promotions", permission: "Promotions.View" },
+    { label: "Cafe Settings", icon: SettingsIcon, href: "/admin/settings", permission: "Settings.View" },
+    { label: "Staff & Crew", icon: Shield, href: "/admin/users", permission: "Users.View" },
+    { label: "Active Sessions", icon: LogOut, href: "/admin/sessions", permission: "Audit.View" },
+    { label: "Login History", icon: SettingsIcon, href: "/admin/login-history", permission: "Audit.View" },
+    { label: "System Audit Logs", icon: SettingsIcon, href: "/admin/audit", permission: "Audit.View" },
   ];
 
   return (
@@ -275,8 +321,8 @@ function AdminLayout() {
             {/* Sidebar Navigation */}
             <nav className="p-4 space-y-1">
               {navLinks.map((link) => {
-                const hasPermission = role && link.roles.includes(role);
-                if (!hasPermission) return null;
+                const permitted = hasPermission(role, link.permission);
+                if (!permitted) return null;
 
                 const LinkIcon = link.icon;
                 const active = location.pathname === link.href;

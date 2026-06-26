@@ -49,17 +49,28 @@ const settingsInputSchema = z.object({
   themeColor: z.string().max(20).default("#4A5D23"),
 });
 
-// Helper: Verify User and Role Permissions (RBAC)
-async function verifyUserAndRole(
+import { hasPermission, type Permission } from "./permissions";
+
+// Helper: Verify User and Permissions (RBAC)
+async function verifyPermission(
   authHeader: string | null,
-  allowedRoles: ("Owner" | "Manager" | "Staff")[]
-): Promise<{ userId: string; role: string }> {
+  requiredPermission: Permission
+): Promise<{ userId: string; role: string; email: string; sessionId?: string }> {
   if (!authHeader) {
     throw new Error("Missing authorization header.");
   }
   
   // Extract token from bearer header
   const token = authHeader.replace("Bearer ", "").trim();
+  
+  // Extract session_id from JWT payload
+  let sessionId: string | null = null;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    sessionId = payload.session_id || null;
+  } catch (e) {
+    console.warn("Could not parse session_id from JWT token");
+  }
   
   // Initialize authenticated client to bypass RLS restrictions
   const authClient = createAuthClient(token);
@@ -70,34 +81,47 @@ async function verifyUserAndRole(
     throw new Error("Unauthorized. Invalid session token.");
   }
 
-  // Get user role using the authenticated client
-  console.log("SUPABASE_QUERY_STARTED", "fetch user role");
+  // Verify Force Logout (Layer 2)
+  if (sessionId) {
+    console.log("SUPABASE_QUERY_STARTED", "verify_active_session");
+    const { data: isSessionValid, error: sessionError } = await authClient.rpc("verify_active_session", {
+      p_user_id: user.id,
+      p_session_id: sessionId
+    });
+    console.log("SUPABASE_QUERY_FINISHED", "verify_active_session");
+
+    if (sessionError || isSessionValid === false) {
+      throw new Error("Session has been forcibly logged out.");
+    }
+  }
+
+  // Get user role and status using the authenticated client
+  console.log("SUPABASE_QUERY_STARTED", "fetch user role and status");
   const { data: roleData, error: roleError } = await authClient
     .from("user_roles")
-    .select("role")
+    .select("role, status, locked_until")
     .eq("user_id", user.id)
     .maybeSingle();
-  console.log("SUPABASE_QUERY_FINISHED", "fetch user role");
-
-  console.log("JWT_USER_ID", user.id);
-  console.log("ROLE_QUERY_RESULT", roleData);
-  
-  if (roleError) {
-    console.log("ROLE_QUERY_ERROR", roleError);
-    console.log("TABLE: user_roles", "OPERATION: SELECT");
-  }
+  console.log("SUPABASE_QUERY_FINISHED", "fetch user role and status");
 
   if (roleError || !roleData) {
     throw new Error(`Forbidden. User does not have an assigned admin role.`);
   }
 
-  const role = roleData.role as "Owner" | "Manager" | "Staff";
-  if (!allowedRoles.includes(role)) {
-    throw new Error(`Forbidden. Required role not met. Allowed: ${allowedRoles.join(", ")}`);
+  // Security Checks
+  if (roleData.status === "Pending") throw new Error("Account is pending. Please contact the Owner.");
+  if (roleData.status === "Inactive") throw new Error("Account is inactive.");
+  if (roleData.status === "Suspended") throw new Error("Account is suspended.");
+  if (roleData.locked_until && new Date(roleData.locked_until) > new Date()) {
+    throw new Error("Account is temporarily locked due to too many failed attempts.");
   }
 
-  console.log("TOKEN_VERIFIED", user.id, role);
-  return { userId: user.id, role };
+  const role = roleData.role;
+  if (!hasPermission(role, requiredPermission)) {
+    throw new Error(`Forbidden. Required permission '${requiredPermission}' not met for role '${role}'.`);
+  }
+
+  return { userId: user.id, role, email: user.email || "", sessionId: sessionId || undefined };
 }
 
 // Helper: Log audit trail
@@ -127,8 +151,8 @@ export const updateOrderStatusFn = createServerFn({ method: "POST" })
       console.log("SERVER_ACTION_STARTED", "updateOrderStatusFn");
       const { payload, token } = data;
       
-      // RBAC: Owner, Manager, Staff can change order status
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager", "Staff"]);
+      // RBAC: Verify permission to update order status
+      const { userId } = await verifyPermission(`Bearer ${token}`, "Orders.Update");
 
       // Fetch existing status to prevent illegal transitions (e.g. Served -> Pending)
       console.log("SUPABASE_QUERY_STARTED", "fetch order");
@@ -215,8 +239,8 @@ export const saveMenuItemFn = createServerFn({ method: "POST" })
       const { payload, token } = data;
       console.log("SERVER_ACTION_CALLED payload:", payload.name);
       
-      // RBAC: Only Owner and Manager can manage menu
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      // RBAC: Verify permission to manage menu
+      const { userId } = await verifyPermission(`Bearer ${token}`, payload.id ? "Menu.Update" : "Menu.Create");
 
       const authClient = createAuthClient(token);
       console.log("AUTH_CLIENT_CREATED");
@@ -326,7 +350,7 @@ export const deleteMenuItemFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "deleteMenuItemFn");
       const { id, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(`Bearer ${token}`, "Menu.Delete");
 
       const authClient = createAuthClient(token);
       console.log(`[MENU_DELETE_STARTED] Deleting item with ID: ${id}`);
@@ -379,7 +403,7 @@ export const saveTableFn = createServerFn({ method: "POST" })
     const { payload, token } = data;
     
     // RBAC: Only Owner can manage tables
-    const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner"]);
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     // Generate secure token (8 random alphanumeric characters) — Web Crypto API
     const secureToken = Array.from(crypto.getRandomValues(new Uint8Array(6)))
@@ -428,7 +452,7 @@ export const regenerateTableTokenFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { tableNumber, token } = data;
-    const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner"]);
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     // Generate secure token — Web Crypto API
     const newSecureToken = Array.from(crypto.getRandomValues(new Uint8Array(6)))
@@ -455,7 +479,7 @@ export const regenerateAllTableTokensFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { tableCount, token } = data;
-    const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner"]);
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     const authClient = createAuthClient(token);
 
@@ -480,7 +504,7 @@ export const getTablesFn = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => z.object({ token: z.string() }).parse(data))
   .handler(async ({ data }) => {
     const { token } = data;
-    await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager", "Staff"]);
+    await verifyPermission(`Bearer ${token}`, "Tables.View");
     const authClient = createAuthClient(token);
     const { data: tables } = await authClient.from("restaurant_tables").select("table_number, token").order("table_number");
     return tables || [];
@@ -521,7 +545,7 @@ export const uploadLogoFn = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     try {
       const { payload, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
 
       // Validate MIME type
       const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
@@ -590,7 +614,7 @@ export const updateCafeSettingsFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { payload, token } = data;
-    const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
 
     const authClient = createAuthClient(token);
     const { error } = await authClient
@@ -657,7 +681,7 @@ export const savePromotionFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "savePromotionFn");
       const { payload, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(`Bearer ${token}`, payload.id ? "Promotions.Update" : "Promotions.Create");
       const authClient = createAuthClient(token);
       const isUpdate = !!payload.id;
       let response;
@@ -729,7 +753,7 @@ export const deletePromotionFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "deletePromotionFn");
       const { id, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(`Bearer ${token}`, "Promotions.Delete");
       const authClient = createAuthClient(token);
 
       const { data: item } = await authClient
@@ -764,7 +788,7 @@ export const duplicatePromotionFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "duplicatePromotionFn");
       const { id, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(`Bearer ${token}`, "Promotions.Create");
       const authClient = createAuthClient(token);
 
       const { data: original, error: fetchError } = await authClient
@@ -826,7 +850,7 @@ export const togglePromotionStatusFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "togglePromotionStatusFn");
       const { id, status, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(token, "Promotions.Update");
       const authClient = createAuthClient(token);
 
       const { error } = await authClient
@@ -855,7 +879,7 @@ export const uploadPromotionAssetFn = createServerFn({ method: "POST" })
     try {
       console.log("SERVER_ACTION_STARTED", "uploadPromotionAssetFn");
       const { payload, token } = data;
-      const { userId } = await verifyUserAndRole(`Bearer ${token}`, ["Owner", "Manager"]);
+      const { userId } = await verifyPermission(token, "Promotions.Create");
 
       // Validate MIME type
       const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
