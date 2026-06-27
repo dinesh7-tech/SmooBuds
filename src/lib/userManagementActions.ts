@@ -186,7 +186,13 @@ export const saveUserFn = createServerFn({ method: "POST" })
           .select()
           .single();
 
-        if (error) throw new Error(error.message);
+        console.log("User ID:", actorId);
+        console.log("Supabase Error:", JSON.stringify(error, null, 2));
+        console.log("Returned Data:", updatedUser);
+
+        if (error) {
+          throw new Error(JSON.stringify(error));
+        }
 
         await createAuditLog(actorId, updatedUser.user_id, "Update User", { 
           table_name: "user_roles", record_id: payload.id, old_data: originalUser, new_data: updatedUser 
@@ -207,7 +213,13 @@ export const saveUserFn = createServerFn({ method: "POST" })
           .select()
           .single();
 
-        if (error) throw new Error(error.message);
+        console.log("User ID:", actorId);
+        console.log("Supabase Error:", JSON.stringify(error, null, 2));
+        console.log("Returned Data:", newUser);
+
+        if (error) {
+          throw new Error(JSON.stringify(error));
+        }
 
         await createAuditLog(actorId, null, "Create User", { 
           table_name: "user_roles", record_id: newUser.id, new_data: newUser 
@@ -248,7 +260,13 @@ export const updateUserStatusFn = createServerFn({ method: "POST" })
       .select()
       .single();
 
-    if (error) throw new Error(error.message);
+    console.log("User ID:", actorId);
+    console.log("Supabase Error:", JSON.stringify(error, null, 2));
+    console.log("Returned Data:", updatedUser);
+
+    if (error) {
+      throw new Error(JSON.stringify(error));
+    }
 
     await createAuditLog(actorId, originalUser.user_id, "Change Status", { 
       table_name: "user_roles", record_id: id, old_data: { status: originalUser.status }, new_data: { status } 
