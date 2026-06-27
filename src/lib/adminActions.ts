@@ -165,9 +165,10 @@ export const updateOrderStatusFn = createServerFn({ method: "POST" })
       // RBAC: Verify permission to update order status
       const { userId } = await verifyPermission(`Bearer ${token}`, "Orders.Update");
 
-      // Fetch existing status to prevent illegal transitions (e.g. Served -> Pending)
+      // Fetch existing status using authClient to bypass the 3-hour anon restriction for older orders
       console.log("SUPABASE_QUERY_STARTED", "fetch order");
-      const { data: order, error: fetchError } = await supabase
+      const authClient = createAuthClient(token);
+      const { data: order, error: fetchError } = await authClient
         .from("orders")
         .select("status, table_number")
         .eq("id", payload.orderId)
@@ -197,7 +198,6 @@ export const updateOrderStatusFn = createServerFn({ method: "POST" })
         throw new Error("Cannot modify an order that has already been served.");
       }
 
-      const authClient = createAuthClient(token);
 
       console.log("SUPABASE_QUERY_STARTED", "update order");
       const { error: updateError } = await authClient
@@ -945,5 +945,43 @@ export const uploadPromotionAssetFn = createServerFn({ method: "POST" })
     } catch (error: any) {
       console.error("uploadPromotionAssetFn error:", error);
       throw new Error(error.message || "Failed to upload promotion asset.");
+    }
+  });
+
+// 18. SERVER FUNCTION: Clean Invalid Orders
+export const cleanInvalidOrdersFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({ token: z.string() }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    try {
+      const { token } = data;
+      // Owner-only utility
+      await verifyPermission(`Bearer ${token}`, "Orders.Delete");
+      const authClient = createAuthClient(token);
+
+      console.log("CLEAN_INVALID_ORDERS", "Fetching all orders and items");
+      const { data: allOrders } = await authClient.from("orders").select("id");
+      const { data: allItems } = await authClient.from("order_items").select("order_id");
+      
+      const validOrderIds = new Set((allItems || []).map(i => i.order_id));
+      const invalidOrders = (allOrders || []).filter(o => !validOrderIds.has(o.id));
+
+      let cleanedCount = 0;
+      if (invalidOrders.length > 0) {
+        const idsToDelete = invalidOrders.map(o => o.id);
+        const { error: deleteError } = await authClient.from("orders").delete().in("id", idsToDelete);
+        
+        if (deleteError) {
+          throw new Error(`Failed to delete orphaned orders: ${deleteError.message}`);
+        }
+        cleanedCount = invalidOrders.length;
+        console.log("CLEAN_INVALID_ORDERS", `Deleted ${cleanedCount} orphaned orders.`);
+      }
+
+      return { success: true, count: cleanedCount };
+    } catch (err: any) {
+      console.error("CLEAN_INVALID_ORDERS_ERROR", err);
+      throw new Error(`Cleanup failed: ${err.message}`);
     }
   });

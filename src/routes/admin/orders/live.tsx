@@ -2,7 +2,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useAdmin } from "@/lib/adminContext";
 import { supabase } from "@/lib/supabase";
-import { updateOrderStatusFn } from "@/lib/adminActions";
+import { updateOrderStatusFn, cleanInvalidOrdersFn } from "@/lib/adminActions";
 import { 
   Clock, 
   Check, 
@@ -50,6 +50,7 @@ function LiveOrdersPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
+  const [isCleaning, setIsCleaning] = useState(false);
 
   // Fetch orders client-side using authenticated session (not anon SSR loader)
   const fetchOrders = async (showSkeleton = true) => {
@@ -160,6 +161,22 @@ function LiveOrdersPage() {
     }
   };
 
+  const handleCleanInvalid = async () => {
+    if (!sessionToken) return;
+    setIsCleaning(true);
+    try {
+      const response = await cleanInvalidOrdersFn({ data: { token: sessionToken } });
+      if (response.success) {
+        toast.success(`Cleaned ${response.count} invalid/orphaned orders.`);
+        fetchOrders(false);
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to clean invalid orders.");
+    } finally {
+      setIsCleaning(false);
+    }
+  };
+
   const getStatusButton = (order: Order) => {
     const isUpdating = updatingId === order.id;
     const isSuccess = successId === order.id;
@@ -244,6 +261,15 @@ function LiveOrdersPage() {
             }`}
           >
             {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+          </button>
+          <button
+            onClick={handleCleanInvalid}
+            disabled={isCleaning}
+            className="ml-2 bg-sage/10 hover:bg-sage/20 text-sage text-[10px] font-display uppercase tracking-widest font-semibold px-4 py-2 rounded-full flex items-center gap-1 transition-colors disabled:opacity-50"
+            title="Clean Invalid/Orphaned Orders"
+          >
+            {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Clean Invalid
           </button>
         </div>
       </div>
