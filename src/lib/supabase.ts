@@ -47,6 +47,12 @@ export const createAuthClient = (token: string) => {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        fetch: (url, options) => {
+          // Force Authorization header directly at the fetch level to prevent Vercel Node runtime interceptor bugs
+          const newHeaders = new Headers(options?.headers);
+          newHeaders.set("Authorization", `Bearer ${token}`);
+          return fetch(url, { ...options, headers: newHeaders });
+        },
       },
     }
   );

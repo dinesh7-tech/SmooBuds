@@ -158,7 +158,14 @@ export const saveUserFn = createServerFn({ method: "POST" })
 
       if (payload.id) {
         // UPDATE
-        const { data: originalUser } = await authClient.from("user_roles").select("*").eq("id", payload.id).single();
+        console.log("---- DB OP: SELECT (saveUser) ----");
+        console.log("Current User ID (actorId):", actorId);
+        console.log("JWT Subject (from verifyPermission):", actorId);
+        
+        const { data: originalUser, error: selectError } = await authClient.from("user_roles").select("*").eq("id", payload.id).single();
+        if (selectError) {
+          console.log("SELECT Error:", JSON.stringify(selectError, null, 2));
+        }
         if (!originalUser) throw new Error("User not found.");
 
         // Check Owner protections
@@ -173,7 +180,8 @@ export const saveUserFn = createServerFn({ method: "POST" })
            throw new Error("You cannot change your own status.");
         }
 
-        const { data: updatedUser, error } = await authClient
+        console.log("---- DB OP: UPDATE ----");
+        const updateResult = await authClient
           .from("user_roles")
           .update({
             name: payload.name,
@@ -185,6 +193,14 @@ export const saveUserFn = createServerFn({ method: "POST" })
           .eq("id", payload.id)
           .select()
           .single();
+
+        const { data: updatedUser, error } = updateResult;
+        console.log("UPDATE Result Data:", JSON.stringify(updatedUser, null, 2));
+        if (error) {
+          console.log("UPDATE Error Object:", JSON.stringify(error, null, 2));
+          console.log("SQLSTATE Code:", error.code);
+          console.log("PostgREST Error Message:", error.message);
+        }
 
         console.log("User ID:", actorId);
         console.log("Supabase Error:", JSON.stringify(error, null, 2));
@@ -202,16 +218,25 @@ export const saveUserFn = createServerFn({ method: "POST" })
 
       } else {
         // CREATE
-        const { data: newUser, error } = await authClient
+        console.log("---- DB OP: INSERT ----");
+        const insertResult = await authClient
           .from("user_roles")
           .insert({
             name: payload.name,
             email: normalizedEmail,
             role: payload.role,
-            status: "Pending", // Always starts pending until they log in
+            status: payload.status,
           })
           .select()
           .single();
+          
+        const { data: newUser, error } = insertResult;
+        console.log("INSERT Result Data:", JSON.stringify(newUser, null, 2));
+        if (error) {
+          console.log("INSERT Error Object:", JSON.stringify(error, null, 2));
+          console.log("SQLSTATE Code:", error.code);
+          console.log("PostgREST Error Message:", error.message);
+        }
 
         console.log("User ID:", actorId);
         console.log("Supabase Error:", JSON.stringify(error, null, 2));
