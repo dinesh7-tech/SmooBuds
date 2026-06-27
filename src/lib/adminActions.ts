@@ -81,7 +81,7 @@ async function verifyPermission(
   const authClient = createAuthClient(token);
   
   // Verify JWT session with Supabase
-  const { data: { user }, error: authError } = await authClient.auth.getUser();
+  const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) {
     throw new Error("Unauthorized. Invalid session token.");
   }
