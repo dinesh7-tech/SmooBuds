@@ -37,6 +37,12 @@ export const createAuthClient = (token: string) => {
     supabaseUrl || "https://placeholder.supabase.co",
     supabaseAnonKey || "placeholder-anon-key",
     {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      accessToken: async () => token,
       global: {
         headers: {
           Authorization: `Bearer ${token}`,
