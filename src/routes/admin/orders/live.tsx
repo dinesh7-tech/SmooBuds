@@ -33,7 +33,6 @@ interface Order {
   total_amount: number;
   status: "Pending" | "Accepted" | "Preparing" | "Ready" | "Served" | "Cancelled";
   created_at: string;
-  customer_name?: string;
   order_items: OrderItem[];
 }
 
@@ -67,7 +66,6 @@ function LiveOrdersPage() {
           total_amount,
           status,
           created_at,
-          customer_name,
           order_items (
             id,
             item_name,
@@ -321,7 +319,7 @@ function LiveOrdersPage() {
                 }`}>
                   <div>
                     <h3 className="font-display font-extrabold text-lg text-sage-deep">
-                      Table {order.table_number} {order.customer_name ? `- ${order.customer_name}` : ""}
+                      Table {order.table_number}
                     </h3>
                     <span className="text-[10px] text-sage-deep/50 font-medium">
                       Placed at {formattedTime} ({minutesElapsed}m ago)
