@@ -26,7 +26,7 @@ import { placeOrderFn, submitTableRequestFn, getNonceFn } from "@/lib/orderActio
 import { verifyTableToken } from "@/lib/verifyTable";
 import { toast } from "sonner";
 import { MenuPagePromotionBanner, CheckoutPromotionBanner } from "@/components/promotions/PromotionsEngine";
-
+import { CustomerOrders } from "@/components/CustomerOrders";
 // 1. Zod Search Params Schema
 const menuSearchSchema = z.object({
   table: z.coerce.number().int().positive().optional(),
@@ -589,6 +589,9 @@ function MenuPage() {
 
         <MenuPagePromotionBanner />
 
+        {isVerified && tableNumber && (
+          <CustomerOrders tableNumber={tableNumber} />
+        )}
         {/* Filters */}
         <div className="flex flex-col gap-4 mb-6 sm:mb-8 sticky top-[72px] sm:top-[76px] z-30 bg-cream/95 backdrop-blur-xl py-3 -mx-4 px-4 sm:mx-0 sm:px-0 border-b sm:border-none border-sage/5">
           <div className="relative w-full max-w-full">

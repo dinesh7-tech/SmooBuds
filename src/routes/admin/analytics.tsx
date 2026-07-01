@@ -4,6 +4,7 @@ import { useAdmin } from "@/lib/adminContext";
 import { fetchAnalyticsDataFn, fetchLiveDashboardStatsFn } from "@/lib/adminActions";
 import { AnalyticsPayload } from "@/lib/analyticsEngine";
 import { supabase } from "@/lib/supabase";
+import { CountUp } from "@/components/CountUp";
 import { z } from "zod";
 import { 
   TrendingUp, 
@@ -132,10 +133,11 @@ function AnalyticsDashboardPage() {
     };
   }, [sessionToken, search.from, search.to]);
 
-  // Auto-refresh Live Stats every 30s using secure server function
+  // Use Supabase Realtime for instant updates instead of setInterval
   useEffect(() => {
     if (!sessionToken) return;
     let mounted = true;
+    
     const updateLive = async () => {
       try {
         const data = await fetchLiveDashboardStatsFn({
@@ -148,12 +150,35 @@ function AnalyticsDashboardPage() {
     };
     
     updateLive(); // fetch immediately
-    const interval = setInterval(updateLive, 30000);
+    
+    const channel = supabase
+      .channel("admin_analytics_realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => {
+          updateLive();
+          // Also optionally re-fetch full stats if it's today
+          if (dateMode === 'single' && dateRange.from === format(new Date(), "yyyy-MM-dd")) {
+            fetchAnalyticsDataFn({
+              data: {
+                from: dateRange.from,
+                to: dateRange.to,
+                token: sessionToken,
+              },
+            }).then((res) => {
+              if (mounted) setInitialStats(res);
+            }).catch(() => {});
+          }
+        }
+      )
+      .subscribe();
+
     return () => {
       mounted = false;
-      clearInterval(interval);
+      supabase.removeChannel(channel);
     };
-  }, [sessionToken]);
+  }, [sessionToken, dateMode, dateRange]);
 
   // Show premium loading skeleton
   if (loading || !initialStats) {

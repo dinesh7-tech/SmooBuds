@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useAdmin } from "@/lib/adminContext";
 import { supabase } from "@/lib/supabase";
 import { updateOrderStatusFn } from "@/lib/adminActions";
+import { formatOrderTime } from "@/lib/utils";
 import { 
   Calendar, 
   ChevronDown, 
@@ -195,14 +196,7 @@ function OrdersManagementPage() {
       ) : (
       <div className="space-y-4">
         {filteredOrders.map((order) => {
-          const formattedDate = new Date(order.created_at).toLocaleDateString([], {
-            month: "short",
-            day: "numeric",
-          });
-          const formattedTime = new Date(order.created_at).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          });
+          const formattedTime = formatOrderTime(order.created_at);
 
           return (
             <div
@@ -224,7 +218,7 @@ function OrdersManagementPage() {
                     ID: #{order.id.slice(0, 8)}
                   </span>
                   <span className="text-xs text-sage-deep/80 mt-1 flex items-center gap-1">
-                    <Calendar size={12} /> {formattedDate} at {formattedTime}
+                    <Calendar size={12} /> {formattedTime}
                   </span>
                   <div className="mt-2">
                     <span className={`text-[9px] font-display uppercase tracking-widest font-extrabold px-2.5 py-0.5 rounded-full ${

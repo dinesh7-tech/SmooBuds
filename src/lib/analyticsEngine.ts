@@ -184,9 +184,7 @@ export async function fetchAnalyticsData(authClient: any, fromDate?: Date, toDat
 
   // Format helper for peak hours
   function formatHour(h: number) {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const hr = h % 12 || 12;
-    return `${hr} ${ampm}`;
+    return h.toString().padStart(2, '0');
   }
 
   if (daysDiff <= 1) {
@@ -220,7 +218,7 @@ export async function fetchAnalyticsData(authClient: any, fromDate?: Date, toDat
 
       rangeTotalOrders++;
 
-      if (order.status === "Served") {
+      if (order.status === "Served" || order.status === "Completed") {
         completedOrders++;
       } else if (order.status === "Cancelled") {
         cancelledOrders++;
@@ -301,7 +299,7 @@ export async function fetchAnalyticsData(authClient: any, fromDate?: Date, toDat
 
   const todayVsYesterdayPercent = yesterdayRevenue === 0 ? (todayRevenue > 0 ? 100 : 0) : ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100;
   const monthVsMonthPercent = lastMonthRevenue === 0 ? (thisMonthRevenue > 0 ? 100 : 0) : ((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100;
-  const averageOrderValue = (rangeTotalOrders - cancelledOrders) > 0 ? Math.round(rangeTotalRevenue / (rangeTotalOrders - cancelledOrders)) : 0;
+  const averageOrderValue = completedOrders > 0 ? Math.round(rangeTotalRevenue / completedOrders) : 0;
 
   // Peak and Slowest Hour calculations
   let peakOrderingHourStr: string | null = null;

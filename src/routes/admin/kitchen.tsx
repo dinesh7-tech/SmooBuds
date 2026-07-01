@@ -34,6 +34,13 @@ function KitchenBoard() {
   const [dataLoading, setDataLoading] = useState(true);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  // Force re-render every minute to update elapsed time
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const fetchQueue = async (showSkeleton = true) => {
     if (!sessionToken) return;
@@ -168,9 +175,19 @@ function KitchenBoard() {
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {kitchenQueue.map((order) => {
           const minutesElapsed = Math.floor(
-            (Date.now() - new Date(order.created_at).getTime()) / 60000
+            (now - new Date(order.created_at).getTime()) / 60000
           );
           const isPreparing = order.status === "Preparing";
+
+          let timerColorClass = "text-sage-deep/50";
+          let timerDotClass = "bg-sage-deep/30";
+          if (minutesElapsed >= 20) {
+            timerColorClass = "text-red-600 bg-red-50 border border-red-200 px-2 py-1 rounded-full";
+            timerDotClass = "bg-red-500 animate-pulse";
+          } else if (minutesElapsed >= 10) {
+            timerColorClass = "text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-1 rounded-full";
+            timerDotClass = "bg-yellow-500";
+          }
 
           return (
             <div
@@ -189,7 +206,8 @@ function KitchenBoard() {
                   <h3 className="font-display font-extrabold text-3xl text-sage-deep">
                     Table {order.table_number}
                   </h3>
-                  <span className="text-xs text-sage-deep/50 mt-1 flex items-center gap-1 font-semibold">
+                  <span className={`text-xs mt-2 flex items-center gap-1.5 font-semibold w-fit ${timerColorClass}`}>
+                    {minutesElapsed >= 10 && <span className={`w-2 h-2 rounded-full ${timerDotClass}`} />}
                     <Clock size={12} /> {minutesElapsed}m elapsed
                   </span>
                 </div>

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useAdmin } from "@/lib/adminContext";
 import { supabase } from "@/lib/supabase";
 import { updateOrderStatusFn, cleanInvalidOrdersFn } from "@/lib/adminActions";
+import { formatOrderTime } from "@/lib/utils";
 import { 
   Clock, 
   Check, 
@@ -51,6 +52,13 @@ function LiveOrdersPage() {
   const [successId, setSuccessId] = useState<string | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<string | null>(null);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  // Force re-render every minute to update elapsed time
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch orders client-side using authenticated session (not anon SSR loader)
   const fetchOrders = async (showSkeleton = true) => {
@@ -292,13 +300,23 @@ function LiveOrdersPage() {
       {!dataLoading && (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {liveOrders.map((order) => {
-            const formattedTime = new Date(order.created_at).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            });
+            const formattedTime = formatOrderTime(order.created_at);
             const minutesElapsed = Math.floor(
-              (Date.now() - new Date(order.created_at).getTime()) / 60000
+              (now - new Date(order.created_at).getTime()) / 60000
             );
+            
+            let timerColorClass = "bg-sage/10 text-sage-deep"; // default
+            let timerDotClass = "bg-sage";
+            if (minutesElapsed >= 20) {
+              timerColorClass = "bg-red-100 text-red-800 border-red-200";
+              timerDotClass = "bg-red-500 animate-pulse";
+            } else if (minutesElapsed >= 10) {
+              timerColorClass = "bg-yellow-100 text-yellow-800 border-yellow-200";
+              timerDotClass = "bg-yellow-500";
+            } else {
+              timerColorClass = "bg-green-100 text-green-800 border-green-200";
+              timerDotClass = "bg-green-500";
+            }
 
             return (
               <article
@@ -318,11 +336,15 @@ function LiveOrdersPage() {
                   "bg-teal-50/50"
                 }`}>
                   <div>
-                    <h3 className="font-display font-extrabold text-lg text-sage-deep">
+                    <h3 className="font-display font-extrabold text-lg text-sage-deep flex items-center gap-2">
                       Table {order.table_number}
+                      <span className={`text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${timerColorClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${timerDotClass}`} />
+                        {minutesElapsed}m
+                      </span>
                     </h3>
                     <span className="text-[10px] text-sage-deep/50 font-medium">
-                      Placed at {formattedTime} ({minutesElapsed}m ago)
+                      Placed: {formattedTime}
                     </span>
                   </div>
                   <span className={`text-[10px] font-display uppercase tracking-widest font-extrabold px-3 py-1 rounded-full ${
