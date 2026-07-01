@@ -3,7 +3,7 @@ import { supabase } from "./supabase";
 
 export const tableVerificationSchema = z.object({
   tableNumber: z.coerce.number().int().positive({ message: "Table number must be a positive integer" }),
-  token: z.string().min(8).max(128).regex(/^[a-fA-F0-9]+$/, { message: "Invalid characters in token" }),
+  token: z.string().min(8).max(128).regex(/^[a-zA-Z0-9]+$/, { message: "Invalid characters in token" }),
 });
 
 export async function verifyTableToken(tableNumber: number, token: string): Promise<boolean> {
