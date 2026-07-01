@@ -178,7 +178,7 @@ export const placeOrderFn = createServerFn({ method: "POST" })
       p_table_token: token,
       p_idempotency_key: idempotencyKey,
       p_applied_promotion_id: appliedPromotionId || null,
-      p_items: JSON.stringify(items),
+      p_items: items,
       p_nonce: nonce
     });
 

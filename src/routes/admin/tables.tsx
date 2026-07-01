@@ -2,7 +2,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState, useEffect, useRef } from "react";
 import { useAdmin } from "@/lib/adminContext";
 import { supabase } from "@/lib/supabase";
-import { saveTableFn, regenerateTableTokenFn } from "@/lib/adminActions";
+import { saveTableFn, regenerateTableTokenFn, deleteTableFn } from "@/lib/adminActions";
 import { QRCodeCanvas } from "qrcode.react";
 import { 
   Plus, 
@@ -14,7 +14,8 @@ import {
   AlertTriangle,
   ExternalLink,
   Ban,
-  Unlock
+  Unlock,
+  Trash2
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -77,6 +78,11 @@ function TablesManagementPage() {
   const [isWarnOpen, setIsWarnOpen] = useState(false);
   const [warnTable, setWarnTable] = useState<Table | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
+
+  // Delete Modal States
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [deleteTable, setDeleteTable] = useState<Table | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const [origin, setOrigin] = useState("https://smoobuds.vercel.app");
 
@@ -182,6 +188,32 @@ function TablesManagementPage() {
       toast.error(err?.message || "Failed to regenerate token.");
     } finally {
       setIsRegenerating(false);
+    }
+  };
+
+  // Confirm Delete Table
+  const confirmDelete = async () => {
+    if (!deleteTable || !sessionToken) return;
+
+    setIsDeleting(true);
+    try {
+      const response = await deleteTableFn({
+        data: {
+          tableNumber: deleteTable.table_number,
+          token: sessionToken,
+        },
+      });
+
+      if (response.success) {
+        toast.success(`Table ${deleteTable.table_number} deleted successfully.`);
+        setIsDeleteOpen(false);
+        setDeleteTable(null);
+        fetchTables();
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to delete table.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -301,6 +333,15 @@ function TablesManagementPage() {
                       <Unlock size={12} /> Enable Table
                     </>
                   )}
+                </button>
+                <button
+                  onClick={() => {
+                    setDeleteTable(table);
+                    setIsDeleteOpen(true);
+                  }}
+                  className="w-full text-[9px] tracking-widest uppercase font-display font-bold py-2 rounded-lg border transition-all cursor-pointer flex items-center justify-center gap-1 bg-white border-red-500/20 hover:bg-red-500/5 text-red-600 mt-2"
+                >
+                  <Trash2 size={12} /> Delete Table
                 </button>
               </div>
             </div>
@@ -445,6 +486,40 @@ function TablesManagementPage() {
                 className="flex-1 bg-destructive hover:bg-destructive-deep text-white py-3 rounded-xl font-display font-bold uppercase tracking-wider transition-colors shadow-soft cursor-pointer"
               >
                 {isRegenerating ? "Regenerating..." : "Regenerate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {isDeleteOpen && deleteTable && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-sage-deep/40 backdrop-blur-sm" onClick={() => !isDeleting && setIsDeleteOpen(false)}></div>
+          <div className="bg-white rounded-3xl shadow-luxe w-full max-w-md relative z-10 overflow-hidden border border-sage/10">
+            <div className="bg-red-50 p-6 flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4 shadow-inner">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="font-display font-extrabold text-2xl text-red-800">Delete Table {deleteTable.table_number}?</h3>
+              <p className="text-red-600/80 mt-2 text-sm max-w-[250px]">
+                This action is irreversible. All associated orders, order items, and table requests will be permanently deleted.
+              </p>
+            </div>
+            <div className="p-6 bg-white space-y-4">
+              <button
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-display font-bold tracking-wider uppercase text-sm py-4 rounded-xl shadow-soft transition-all cursor-pointer"
+              >
+                {isDeleting ? "Deleting..." : "Yes, Delete Table"}
+              </button>
+              <button
+                onClick={() => setIsDeleteOpen(false)}
+                disabled={isDeleting}
+                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-display font-bold tracking-wider uppercase text-sm py-4 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
               </button>
             </div>
           </div>

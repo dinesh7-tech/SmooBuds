@@ -451,7 +451,6 @@ export const saveTableFn = createServerFn({ method: "POST" })
         .insert({
           table_number: payload.tableNumber,
           token: secureToken,
-          qr_token: secureToken, // Keep in sync to satisfy schema constraints
           is_active: payload.isActive,
           qr_status: "Active",
         });
@@ -481,7 +480,6 @@ export const regenerateTableTokenFn = createServerFn({ method: "POST" })
       .from("restaurant_tables")
       .update({ 
         token: newSecureToken,
-        qr_token: newSecureToken,
         qr_status: "Active",
       })
       .eq("table_number", tableNumber);
@@ -513,7 +511,6 @@ export const regenerateAllTableTokensFn = createServerFn({ method: "POST" })
       return {
         table_number: i + 1,
         token: secureToken,
-        qr_token: secureToken,
         is_active: true,
         qr_status: "Active",
       };
@@ -523,6 +520,39 @@ export const regenerateAllTableTokensFn = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     await createAuditLog(userId, "Bulk QR Regeneration", { tableCount }, authClient);
+    return { success: true };
+  });
+
+export const deleteTableFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      tableNumber: z.number().int().positive(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { tableNumber, token } = data;
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
+
+    const authClient = createAuthClient(token);
+
+    // If ON DELETE CASCADE is missing on old tables, this manual deletion helps
+    await authClient.from("table_requests").delete().eq("table_number", tableNumber);
+    const { data: orderRows } = await authClient.from("orders").select("id").eq("table_number", tableNumber);
+    if (orderRows && orderRows.length > 0) {
+      const orderIds = orderRows.map(o => o.id);
+      await authClient.from("order_items").delete().in("order_id", orderIds);
+      await authClient.from("orders").delete().in("id", orderIds);
+    }
+
+    const { error } = await authClient
+      .from("restaurant_tables")
+      .delete()
+      .eq("table_number", tableNumber);
+
+    if (error) throw new Error(error.message);
+
+    await createAuditLog(userId, "Table Deletion", { tableNumber }, authClient);
     return { success: true };
   });
 
