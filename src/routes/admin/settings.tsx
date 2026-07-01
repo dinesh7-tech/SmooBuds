@@ -7,6 +7,7 @@ import { AlertTriangle, Store, Phone, Mail, Clock, Instagram, Loader2, Check,
   UploadCloud, QrCode, Download, RefreshCw, X, Palette, Settings as SettingsIcon, Link as LinkIcon, Save
 } from "lucide-react";
 import { toast } from "sonner";
+import QRCode from "qrcode";
 
 interface Settings {
   cafe_name: string;
@@ -302,25 +303,31 @@ function SettingsPage() {
     }
   };
 
-  const downloadQR = (tableNumber: number, token: string) => {
+  const downloadQR = async (tableNumber: number, token: string) => {
     const origin = window.location.origin;
-    const orderUrl = `${origin}?table=${tableNumber}&token=${token}`;
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(orderUrl)}&margin=20`;
+    const orderUrl = `${origin}/menu?table=${tableNumber}&token=${token}`;
     
-    // Fetch and download the image
-    fetch(qrUrl)
-      .then(response => response.blob())
-      .then(blob => {
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = `Table_${tableNumber}_QRCode.png`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-      })
-      .catch(() => toast.error("Failed to download QR Code"));
+    try {
+      const dataUrl = await QRCode.toDataURL(orderUrl, {
+        width: 500,
+        margin: 2,
+        color: {
+          dark: "#000000",
+          light: "#ffffff"
+        }
+      });
+      
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = dataUrl;
+      a.download = `Table_${tableNumber}_QRCode.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloaded QR Code for Table ${tableNumber}`);
+    } catch (err) {
+      toast.error("Failed to download QR Code");
+    }
   };
 
   return (

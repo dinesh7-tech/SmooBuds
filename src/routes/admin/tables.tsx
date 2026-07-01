@@ -1,8 +1,9 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAdmin } from "@/lib/adminContext";
 import { supabase } from "@/lib/supabase";
 import { saveTableFn, regenerateTableTokenFn } from "@/lib/adminActions";
+import { QRCodeCanvas } from "qrcode.react";
 import { 
   Plus, 
   QrCode, 
@@ -184,32 +185,27 @@ function TablesManagementPage() {
     }
   };
 
+  const qrRef = useRef<HTMLCanvasElement>(null);
+
   // Get QR URL
   const getTableUrl = (table: Table) => {
     return `${origin}/menu?table=${table.table_number}&token=${table.token}`;
   };
 
-  // Get QR Image API source
-  const getQrImgSrc = (table: Table) => {
-    const dataUrl = getTableUrl(table);
-    return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(dataUrl)}`;
-  };
-
   // Download QR Code PNG
-  const downloadQr = async (table: Table) => {
-    const url = getQrImgSrc(table);
+  const downloadQr = (table: Table) => {
+    if (!qrRef.current) {
+      toast.error("QR Code not ready for download.");
+      return;
+    }
     try {
-      const response = await fetch(url);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      
+      const dataUrl = qrRef.current.toDataURL("image/png");
       const link = document.createElement("a");
-      link.href = blobUrl;
+      link.href = dataUrl;
       link.download = `smoobuds_table_${table.table_number}_qr.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(blobUrl);
       toast.success(`Downloaded QR Code for Table ${table.table_number}`);
     } catch (err) {
       toast.error("Failed to download QR code image.");
@@ -383,11 +379,16 @@ function TablesManagementPage() {
             </div>
             
             {/* QR Image */}
-            <div className="mx-auto w-60 h-60 bg-white border border-sage/10 rounded-2xl overflow-hidden p-4 flex items-center justify-center">
-              <img 
-                src={getQrImgSrc(selectedTable)} 
-                alt={`QR code for Table ${selectedTable.table_number}`} 
-                className="w-full h-full object-contain"
+            <div className="mx-auto w-60 h-60 bg-white border border-sage/10 rounded-2xl overflow-hidden flex items-center justify-center p-2">
+              <QRCodeCanvas 
+                id="qr-canvas-table"
+                value={getTableUrl(selectedTable)} 
+                size={220}
+                bgColor={"#ffffff"}
+                fgColor={"#000000"}
+                level={"H"}
+                includeMargin={false}
+                ref={qrRef}
               />
             </div>
 
