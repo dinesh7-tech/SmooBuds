@@ -9,12 +9,12 @@ ALTER TABLE public.restaurant_tables DROP COLUMN IF EXISTS qr_version;
 ALTER TABLE public.restaurant_tables DROP COLUMN IF EXISTS qr_last_rotated_at;
 
 -- Drop deprecated columns from orders
-ALTER TABLE public.orders DROP COLUMN IF EXISTS session_id;
-ALTER TABLE public.orders DROP COLUMN IF EXISTS table_session_id;
+ALTER TABLE public.orders DROP COLUMN IF EXISTS session_id CASCADE;
+ALTER TABLE public.orders DROP COLUMN IF EXISTS table_session_id CASCADE;
 
 -- Drop deprecated columns from table_requests
-ALTER TABLE public.table_requests DROP COLUMN IF EXISTS session_id;
-ALTER TABLE public.table_requests DROP COLUMN IF EXISTS table_session_id;
+ALTER TABLE public.table_requests DROP COLUMN IF EXISTS session_id CASCADE;
+ALTER TABLE public.table_requests DROP COLUMN IF EXISTS table_session_id CASCADE;
 
 -- Drop deprecated tables (cascades automatically remove their policies and triggers)
 DROP TABLE IF EXISTS public.customer_identity CASCADE;

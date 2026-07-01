@@ -536,14 +536,8 @@ export const deleteTableFn = createServerFn({ method: "POST" })
 
     const authClient = createAuthClient(token);
 
-    // If ON DELETE CASCADE is missing on old tables, this manual deletion helps
-    await authClient.from("table_requests").delete().eq("table_number", tableNumber);
-    const { data: orderRows } = await authClient.from("orders").select("id").eq("table_number", tableNumber);
-    if (orderRows && orderRows.length > 0) {
-      const orderIds = orderRows.map(o => o.id);
-      await authClient.from("order_items").delete().in("order_id", orderIds);
-      await authClient.from("orders").delete().in("id", orderIds);
-    }
+    // Historical data (orders, order_items, table_requests, analytics) 
+    // is permanently preserved. Only the restaurant_tables record is deleted.
 
     const { error } = await authClient
       .from("restaurant_tables")
