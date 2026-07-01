@@ -6,9 +6,80 @@ import crypto from "node:crypto";
 import { supabase } from "./supabase";
 import { 
   verifyTableToken, 
-  isIpRateLimited,
-  logSecurityThreat
 } from "./verifyTable";
+
+// Privacy Hashing
+export function getIpHash(request: Request): string {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+             request.headers.get("x-real-ip") ||
+             "127.0.0.1";
+  return crypto.createHash("sha256").update(ip).digest("hex");
+}
+
+// Database Threat Intelligence Logging
+export async function logSecurityThreat(
+  category: string,
+  severity: "Low" | "Medium" | "High" | "Critical",
+  details: any,
+  request: Request | undefined
+) {
+  try {
+    const rawIp = request ? (request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                            request.headers.get("x-real-ip") ||
+                            "127.0.0.1") : "127.0.0.1";
+    
+    const hashedIp = crypto.createHash("sha256").update(rawIp).digest("hex");
+    const hashedFingerprint = "unknown";
+
+    const { error } = await supabase.from("security_threat_logs").insert({
+      event_category: category,
+      severity,
+      details,
+      hashed_client_ip: hashedIp,
+      hashed_browser_fingerprint: hashedFingerprint,
+      action_taken: severity === "Critical" ? "Revoke Request" : "Flag Action",
+    });
+    if (error) {
+      console.error("Threat Log Insert Error:", error.message);
+    }
+  } catch (err) {
+    console.error("Threat logging exception:", err);
+  }
+}
+
+// Database Rate Limiter
+export async function checkRateLimit(key: string, limit: number, windowSeconds: number): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc("check_rate_limit", {
+      p_key: key,
+      p_limit: limit,
+      p_window_seconds: windowSeconds,
+    });
+    if (error) {
+      console.error("Rate Limiter Database Error:", error.message);
+      return true; // Fail open
+    }
+    return !!data;
+  } catch (err) {
+    console.error("Rate Limiter exception:", err);
+    return true; // Fail open
+  }
+}
+
+export async function isIpRateLimited(request: Request, action: string, limit: number, windowSeconds: number): Promise<boolean> {
+  const ipHash = getIpHash(request);
+  const key = `rate:${action}:${ipHash}`;
+  const allowed = await checkRateLimit(key, limit, windowSeconds);
+  if (!allowed) {
+    await logSecurityThreat(
+      "Rate Limit Abuse",
+      "Medium",
+      { action, limit, windowSeconds },
+      request
+    );
+  }
+  return !allowed;
+}
 
 // Type declarations
 interface OrderItem {
@@ -72,70 +143,6 @@ export const getNonceFn = createServerFn({ method: "POST" })
     return { nonce };
   });
 
-// SERVER FUNCTION: Verify Menu Access
-export const verifyMenuAccessFn = createServerFn({ method: "GET" })
-  .inputValidator((data: unknown) =>
-    z.object({
-      table: z.number().optional(),
-      token: z.string().optional(),
-      data: z.string().optional(), // Left for signature compatibility, but ignored in strict rollback
-    }).parse(data)
-  )
-  .handler(async ({ data }) => {
-    const request = getRequest();
-    if (!request) {
-      return { tableNumber: null, isVerified: false };
-    }
-
-    // 1. Rate Limiting QR scan attempts
-    if (await isIpRateLimited(request, "verify_qr", 10, 60)) {
-      return { tableNumber: null, isVerified: false };
-    }
-
-    // 2. Fetch Cafe Settings to check Emergency Lockdown Levels
-    const { data: settings } = await supabase
-      .from("cafe_settings")
-      .select("qr_emergency_disabled, lockdown_level, disable_legacy_qr")
-      .eq("id", 1)
-      .maybeSingle();
-
-    // Level 3 Lockdown: Complete Customer Lockdown
-    if (settings?.lockdown_level === 3 || settings?.qr_emergency_disabled) {
-      return { tableNumber: null, isVerified: false };
-    }
-
-    let scannedTable: number | undefined;
-    let scannedToken: string | undefined;
-
-    // Strict validation of plain table/token parameters as requested
-    if (data.table !== undefined && data.token !== undefined) {
-      if (settings?.disable_legacy_qr) {
-        await logSecurityThreat("URL Manipulation", "Medium", { message: "Attempted legacy QR scan when legacy support is disabled" }, request);
-        return { tableNumber: null, isVerified: false };
-      }
-
-      const tableVerifyResult = await verifyTableToken(data.table, data.token);
-      if (tableVerifyResult) {
-        scannedTable = data.table;
-        scannedToken = data.token;
-      } else {
-        await logSecurityThreat("Token Guessing", "Low", { table: data.table, token: data.token }, request);
-        return { tableNumber: null, isVerified: false };
-      }
-    }
-
-    if (scannedTable !== undefined && scannedToken !== undefined) {
-      return {
-        tableNumber: scannedTable,
-        isVerified: true,
-      };
-    }
-
-    return {
-      tableNumber: null,
-      isVerified: false,
-    };
-  });
 
 // SERVER FUNCTION: Place Order via Secure PostgreSQL Transaction
 export const placeOrderFn = createServerFn({ method: "POST" })

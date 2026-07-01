@@ -22,7 +22,8 @@ import {
   Coffee
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { placeOrderFn, submitTableRequestFn, verifyMenuAccessFn, getNonceFn } from "@/lib/orderActions";
+import { placeOrderFn, submitTableRequestFn, getNonceFn } from "@/lib/orderActions";
+import { verifyTableToken } from "@/lib/verifyTable";
 import { toast } from "sonner";
 import { MenuPagePromotionBanner, CheckoutPromotionBanner } from "@/components/promotions/PromotionsEngine";
 
@@ -113,28 +114,36 @@ export const Route = createFileRoute("/menu")({
   validateSearch: (search) => menuSearchSchema.parse(search),
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search }) => {
-    const sessionStatus = await verifyMenuAccessFn({
-      data: { table: search.table, token: search.token, data: search.data },
-    });
+    let isVerified = false;
+    let tableNumber = null;
+
+    if (search.table && search.token) {
+      isVerified = await verifyTableToken(search.table, search.token);
+      if (isVerified) {
+        tableNumber = search.table;
+      }
+    }
 
     let menuItems: MenuItem[] = [];
-    try {
-      const { data, error } = await supabase
-        .from("menu_items")
-        .select("*")
-        .eq("is_available", true)
-        .order("name", { ascending: true });
+    if (isVerified) {
+      try {
+        const { data, error } = await supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .order("name", { ascending: true });
 
-      if (!error && data) {
-        menuItems = data as MenuItem[];
+        if (!error && data) {
+          menuItems = data as MenuItem[];
+        }
+      } catch (err) {
+        console.error("Error fetching menu items:", err);
       }
-    } catch (err) {
-      console.error("Error fetching menu items:", err);
     }
 
     return {
-      tableNumber: sessionStatus.tableNumber,
-      isVerified: sessionStatus.isVerified,
+      tableNumber,
+      isVerified,
       token: search.token || null,
       error: search.error || null,
       menuItems,

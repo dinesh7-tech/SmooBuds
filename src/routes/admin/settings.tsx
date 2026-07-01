@@ -134,7 +134,6 @@ function SettingsPage() {
   const [logoUrl, setLogoUrl] = useState(settings?.logo_url || "");
   const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState((settings as any)?.session_timeout_minutes || 180);
   const [qrEmergencyDisabled, setQrEmergencyDisabled] = useState((settings as any)?.qr_emergency_disabled || false);
-  const [qrTokenStrength, setQrTokenStrength] = useState((settings as any)?.qr_token_strength || "256-bit");
   const [lockdownLevel, setLockdownLevel] = useState((settings as any)?.lockdown_level || 0);
   const [qrRotationSchedule, setQrRotationSchedule] = useState((settings as any)?.qr_rotation_schedule || "Manual only");
   const [qrRotationGracePeriodMins, setQrRotationGracePeriodMins] = useState((settings as any)?.qr_rotation_grace_period_mins || 15);
@@ -197,7 +196,6 @@ function SettingsPage() {
             themeColor,
             sessionTimeoutMinutes: Number(sessionTimeoutMinutes),
             qrEmergencyDisabled,
-            qrTokenStrength,
             lockdownLevel: Number(lockdownLevel),
             qrRotationSchedule,
             qrRotationGracePeriodMins: Number(qrRotationGracePeriodMins),
@@ -520,27 +518,6 @@ function SettingsPage() {
                     <p className="text-[10px] text-sage/60 mt-1">Staff and admin portals remain fully active under all levels.</p>
                   </div>
 
-                  {/* QR Token Strength */}
-                  <div>
-                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">QR Token Strength</label>
-                    <select
-                      value={qrTokenStrength}
-                      onChange={(e) => {
-                        setQrTokenStrength(e.target.value);
-                        if (e.target.value === "512-bit") {
-                          toast.error("Warning: 512-bit tokens generate highly dense QR codes that are harder to scan on older phone cameras.", { duration: 5000 });
-                        }
-                      }}
-                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
-                    >
-                      <option value="128-bit">128-bit (Faster scanning)</option>
-                      <option value="256-bit">256-bit (Recommended default)</option>
-                      <option value="512-bit">512-bit (Maximum security)</option>
-                    </select>
-                    {qrTokenStrength === "512-bit" && (
-                      <p className="text-[10px] text-amber-600 mt-1 font-semibold">⚠️ Denser QR codes might affect scanning speeds.</p>
-                    )}
-                  </div>
 
                   {/* QR Rotation Schedule */}
                   <div>

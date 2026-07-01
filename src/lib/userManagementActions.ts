@@ -4,7 +4,7 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { createAuthClient, supabase } from "./supabase";
 import { hasPermission, type Permission } from "./permissions";
-import { isIpRateLimited, checkRateLimit } from "./verifyTable";
+import { isIpRateLimited, checkRateLimit } from "./orderActions";
 
 const INTERNAL_RPC_SECRET = process.env.INTERNAL_RPC_SECRET || "smoobuds_internal_rpc_secret_2026";
 

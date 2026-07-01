@@ -412,21 +412,6 @@ export const deleteMenuItemFn = createServerFn({ method: "POST" })
     }
   });
 
-// Helper to retrieve configured token byte length
-async function getQrTokenBytesLength(authClient: any): Promise<number> {
-  try {
-    const { data: settings } = await authClient
-      .from("cafe_settings")
-      .select("qr_token_strength")
-      .eq("id", 1)
-      .maybeSingle();
-    const strength = settings?.qr_token_strength || "256-bit";
-    return strength === "128-bit" ? 16 : strength === "512-bit" ? 64 : 32;
-  } catch {
-    return 32; // Fallback to 256-bit
-  }
-}
-
 // 4. SERVER FUNCTIONS: Table & QR Management
 export const saveTableFn = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => 
@@ -442,8 +427,7 @@ export const saveTableFn = createServerFn({ method: "POST" })
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     const authClient = createAuthClient(token);
-    const bytesCount = await getQrTokenBytesLength(authClient);
-    const secureToken = crypto.randomBytes(bytesCount).toString("hex");
+    const secureToken = crypto.randomBytes(32).toString("hex");
 
     const { data: existingTable } = await authClient
       .from("restaurant_tables")
@@ -466,10 +450,10 @@ export const saveTableFn = createServerFn({ method: "POST" })
         .from("restaurant_tables")
         .insert({
           table_number: payload.tableNumber,
-          qr_token: secureToken,
+          token: secureToken,
+          qr_token: secureToken, // Keep in sync to satisfy schema constraints
           is_active: payload.isActive,
           qr_status: "Active",
-          qr_version: 1,
         });
       if (error) throw new Error(error.message);
 
@@ -491,27 +475,14 @@ export const regenerateTableTokenFn = createServerFn({ method: "POST" })
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     const authClient = createAuthClient(token);
-    const bytesCount = await getQrTokenBytesLength(authClient);
-    const newSecureToken = crypto.randomBytes(bytesCount).toString("hex");
-
-    // Fetch existing token and version to rotate gracefully
-    const { data: currentTable } = await authClient
-      .from("restaurant_tables")
-      .select("qr_token, qr_version")
-      .eq("table_number", tableNumber)
-      .single();
-
-    const nextVersion = (currentTable?.qr_version || 1) + 1;
-    const previousToken = currentTable?.qr_token || null;
+    const newSecureToken = crypto.randomBytes(32).toString("hex");
 
     const { error } = await authClient
       .from("restaurant_tables")
       .update({ 
+        token: newSecureToken,
         qr_token: newSecureToken,
-        previous_qr_token: previousToken,
-        rotated_at: new Date().toISOString(),
-        qr_version: nextVersion,
-        qr_last_rotated_at: new Date().toISOString()
+        qr_status: "Active",
       })
       .eq("table_number", tableNumber);
 
@@ -533,19 +504,20 @@ export const regenerateAllTableTokensFn = createServerFn({ method: "POST" })
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     const authClient = createAuthClient(token);
-    const bytesCount = await getQrTokenBytesLength(authClient);
 
     // Delete existing tables
     await authClient.from("restaurant_tables").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
-    // Insert new tables with secure tokens matching configured strength
-    const newTables = Array.from({ length: tableCount }).map((_, i) => ({
-      table_number: i + 1,
-      qr_token: crypto.randomBytes(bytesCount).toString("hex"),
-      is_active: true,
-      qr_status: "Active",
-      qr_version: 1,
-    }));
+    const newTables = Array.from({ length: tableCount }).map((_, i) => {
+      const secureToken = crypto.randomBytes(32).toString("hex");
+      return {
+        table_number: i + 1,
+        token: secureToken,
+        qr_token: secureToken,
+        is_active: true,
+        qr_status: "Active",
+      };
+    });
 
     const { error } = await authClient.from("restaurant_tables").insert(newTables);
     if (error) throw new Error(error.message);
@@ -562,17 +534,15 @@ export const getTablesFn = createServerFn({ method: "GET" })
     const authClient = createAuthClient(token);
     const { data: tables } = await authClient
       .from("restaurant_tables")
-      .select("id, table_number, qr_token, qr_status, qr_version, expires_at")
+      .select("id, table_number, token, is_active, created_at")
       .order("table_number");
 
-    // Map database qr_token to token field for backward compatibility
     return (tables || []).map(t => ({
       id: t.id,
       table_number: t.table_number,
-      token: t.qr_token,
-      qr_status: t.qr_status,
-      qr_version: t.qr_version,
-      expires_at: t.expires_at,
+      token: t.token,
+      is_active: t.is_active,
+      created_at: t.created_at,
     }));
   });
 
@@ -1082,66 +1052,6 @@ export const fetchLiveDashboardStatsFn = createServerFn({ method: "POST" })
     return fetchLiveDashboardStats(authClient);
   });
 
-export const revokeSessionFn = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => 
-    z.object({
-      sessionId: z.string().uuid(),
-      token: z.string(),
-    }).parse(data)
-  )
-  .handler(async ({ data }) => {
-    const { sessionId, token } = data;
-    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
-    const authClient = createAuthClient(token);
-    
-    const { data: success, error } = await authClient.rpc("revoke_dining_session", {
-      p_session_id: sessionId
-    });
-    if (error) throw new Error(error.message);
-    
-    await createAuditLog(userId, "Session Revocation", { sessionId }, authClient);
-    return { success };
-  });
-
-export const revokeTableSessionsFn = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => 
-    z.object({
-      tableId: z.string().uuid(),
-      token: z.string(),
-    }).parse(data)
-  )
-  .handler(async ({ data }) => {
-    const { tableId, token } = data;
-    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
-    const authClient = createAuthClient(token);
-    
-    const { data: success, error } = await authClient.rpc("revoke_table_sessions", {
-      p_table_id: tableId
-    });
-    if (error) throw new Error(error.message);
-    
-    await createAuditLog(userId, "Table Sessions Revocation", { tableId }, authClient);
-    return { success };
-  });
-
-export const revokeAllCustomerSessionsFn = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => 
-    z.object({
-      token: z.string(),
-    }).parse(data)
-  )
-  .handler(async ({ data }) => {
-    const { token } = data;
-    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
-    const authClient = createAuthClient(token);
-    
-    const { data: success, error } = await authClient.rpc("revoke_all_dining_sessions");
-    if (error) throw new Error(error.message);
-    
-    await createAuditLog(userId, "Global Sessions Revocation", {}, authClient);
-    return { success };
-  });
-
 export const fetchSecurityStatsFn = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => 
     z.object({
@@ -1153,25 +1063,8 @@ export const fetchSecurityStatsFn = createServerFn({ method: "POST" })
     await verifyPermission(`Bearer ${token}`, "Settings.View");
     const authClient = createAuthClient(token);
 
-    // 1. Fetch active dining sessions with table numbers
-    const { data: activeSessions, error: sessionsError } = await authClient
-      .from("dining_sessions")
-      .select(`
-        id,
-        session_token,
-        is_active,
-        created_at,
-        expires_at,
-        trust_score,
-        restaurant_tables (
-          id,
-          table_number
-        )
-      `)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-
-    if (sessionsError) throw new Error(sessionsError.message);
+    // 1. Fetch active dining sessions with table numbers (Removed)
+    const activeSessions: any[] = [];
 
     // 2. Fetch threat logs
     const { data: threatLogs, error: logsError } = await authClient
