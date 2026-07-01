@@ -18,6 +18,7 @@ interface Order {
   table_number: number;
   status: "Pending" | "Accepted" | "Preparing" | "Ready" | "Served" | "Cancelled";
   created_at: string;
+  customer_name?: string;
   order_items: OrderItem[];
 }
 
@@ -47,6 +48,7 @@ function KitchenBoard() {
           table_number,
           status,
           created_at,
+          customer_name,
           order_items (
             id,
             item_name,
@@ -189,6 +191,11 @@ function KitchenBoard() {
                   <h3 className="font-display font-extrabold text-3xl text-sage-deep">
                     Table {order.table_number}
                   </h3>
+                  { order.customer_name && (
+                    <p className="text-sm font-display font-bold text-sage mt-1">
+                      {order.customer_name}
+                    </p>
+                  )}
                   <span className="text-xs text-sage-deep/50 mt-1 flex items-center gap-1 font-semibold">
                     <Clock size={12} /> {minutesElapsed}m elapsed
                   </span>

@@ -236,7 +236,7 @@ function AdminLayout() {
           setActiveRequests((prev) => [payload.new, ...prev]);
           setPendingRequestsCount((c) => c + 1);
           playAlert();
-          toast.info(`Table ${payload.new.table_number}: ${payload.new.request_type} requested!`);
+          toast.info(`${payload.new.customer_name || "Table " + payload.new.table_number}: ${payload.new.request_type} requested!`);
         }
       )
       .on(
@@ -244,7 +244,7 @@ function AdminLayout() {
         { event: "INSERT", schema: "public", table: "orders" },
         (payload) => {
           playAlert();
-          toast.success(`New order placed! Table ${payload.new.table_number} (₹${payload.new.total_amount})`);
+          toast.success(`New order from ${payload.new.customer_name || "Table " + payload.new.table_number} (₹${payload.new.total_amount})`);
         }
       )
       .subscribe();
@@ -296,6 +296,7 @@ function AdminLayout() {
     { label: "Analytics", icon: BarChart3, href: "/admin/analytics", permission: "Analytics.View" },
     { label: "Promotions", icon: Megaphone, href: "/admin/promotions", permission: "Promotions.View" },
     { label: "Cafe Settings", icon: SettingsIcon, href: "/admin/settings", permission: "Settings.View" },
+    { label: "Security & Threats", icon: Shield, href: "/admin/security", permission: "Settings.View" },
     { label: "Staff & Crew", icon: Shield, href: "/admin/users", permission: "Users.View" },
     { label: "Active Sessions", icon: LogOut, href: "/admin/sessions", permission: "Audit.View" },
     { label: "Login History", icon: SettingsIcon, href: "/admin/login-history", permission: "Audit.View" },
@@ -434,7 +435,9 @@ function AdminLayout() {
                             className="bg-cream/40 border border-sage/5 rounded-xl p-3 flex justify-between items-start gap-2"
                           >
                             <div className="text-xs">
-                              <p className="font-bold text-sage-deep">Table {req.table_number}</p>
+                              <p className="font-bold text-sage-deep">
+                                {req.customer_name ? `${req.customer_name} (Table ${req.table_number})` : `Table ${req.table_number}`}
+                              </p>
                               <p className="text-sage mt-1 font-semibold flex items-center gap-1">
                                 {req.request_type === "Call Waiter" ? <Bell size={12} /> : <Receipt size={12} />}
                                 {req.request_type}

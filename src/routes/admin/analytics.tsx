@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { useAdmin } from "@/lib/adminContext";
-import { fetchAnalyticsData, fetchLiveDashboardStats, AnalyticsPayload } from "@/lib/analyticsEngine";
+import { fetchAnalyticsDataFn, fetchLiveDashboardStatsFn } from "@/lib/adminActions";
+import { AnalyticsPayload } from "@/lib/analyticsEngine";
 import { supabase } from "@/lib/supabase";
 import { z } from "zod";
 import { 
@@ -57,16 +58,8 @@ const analyticsSearchSchema = z.object({
 export const Route = createFileRoute("/admin/analytics")({
   validateSearch: analyticsSearchSchema,
   loaderDeps: ({ search }) => search,
-  loader: async ({ deps: search }) => {
-    try {
-      const fromDate = search.from ? new Date(search.from) : undefined;
-      const toDate = search.to ? new Date(search.to) : undefined;
-      
-      const stats = await fetchAnalyticsData(fromDate, toDate);
-      return { stats, error: null };
-    } catch (err: any) {
-      return { stats: null, error: err.message || "Failed to load analytics" };
-    }
+  loader: async () => {
+    return { error: null };
   },
   component: AnalyticsDashboardPage,
 });
@@ -74,10 +67,13 @@ export const Route = createFileRoute("/admin/analytics")({
 const COLORS = ['#4A5D23', '#8FA971', '#D4AF37', '#B45309', '#0369A1', '#7C3AED'];
 
 function AnalyticsDashboardPage() {
-  const { stats: initialStats, error } = Route.useLoaderData();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: "/admin/analytics" });
-  const { role } = useAdmin();
+  const { sessionToken, role } = useAdmin();
+
+  const [initialStats, setInitialStats] = useState<AnalyticsPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Mode state: 'single' for single date, 'range' for date range
   const [dateMode, setDateMode] = useState<'single' | 'range'>(
@@ -90,31 +86,86 @@ function AnalyticsDashboardPage() {
   });
 
   const [liveStats, setLiveStats] = useState({
-    revenue: initialStats?.todayRevenue || 0,
-    count: initialStats?.todayOrders || 0,
-    pending: initialStats?.pendingOrders || 0,
-    preparing: initialStats?.preparingOrders || 0,
-    ready: initialStats?.readyOrders || 0,
+    revenue: 0,
+    count: 0,
+    pending: 0,
+    preparing: 0,
+    ready: 0,
   });
 
-  // Auto-refresh Live Stats every 30s
+  // Fetch full stats securely using token
   useEffect(() => {
+    if (!sessionToken) return;
+    let active = true;
+    setLoading(true);
+    setError(null);
+    fetchAnalyticsDataFn({
+      data: {
+        from: search.from || undefined,
+        to: search.to || undefined,
+        token: sessionToken,
+      },
+    })
+      .then((res) => {
+        if (active) {
+          setInitialStats(res);
+          setLoading(false);
+          // initialize live stats from fetched range
+          setLiveStats({
+            revenue: res.todayRevenue,
+            count: res.todayOrders,
+            pending: res.pendingOrders,
+            preparing: res.preparingOrders,
+            ready: res.readyOrders,
+          });
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setError(err.message || "Failed to load analytics");
+          toast.error(err.message || "Failed to load analytics");
+          setLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [sessionToken, search.from, search.to]);
+
+  // Auto-refresh Live Stats every 30s using secure server function
+  useEffect(() => {
+    if (!sessionToken) return;
     let mounted = true;
     const updateLive = async () => {
       try {
-        const data = await fetchLiveDashboardStats();
+        const data = await fetchLiveDashboardStatsFn({
+          data: { token: sessionToken }
+        });
         if (mounted) setLiveStats(data);
       } catch (err) {
         console.error("Live stats sync error:", err);
       }
     };
     
+    updateLive(); // fetch immediately
     const interval = setInterval(updateLive, 30000);
     return () => {
       mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [sessionToken]);
+
+  // Show premium loading skeleton
+  if (loading || !initialStats) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#0C0F0A] text-white">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-[#8FA971] border-t-transparent"></div>
+          <p className="text-[#8FA971] font-medium text-lg animate-pulse">Loading secure analytics dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   // Set date ranges when mode toggles
   const handleModeChange = (mode: 'single' | 'range') => {

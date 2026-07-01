@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { ChefHat, Shield, Mail, Lock, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { loginFn } from "@/lib/userManagementActions";
 
 // Helper to safely extract session_id from JWT payload in the browser
 function extractSessionId(token: string | undefined): string | null {
@@ -47,82 +48,28 @@ function LoginRoute() {
 
     setLoading(true);
     try {
-      // 1. Authenticate with Supabase Auth
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error || !data.user) {
-        // Record failed attempt
-        const { data: rpcData } = await supabase.rpc("record_login_attempt", {
-          p_email: email, 
-          p_success: false, 
-          p_device: navigator.userAgent, 
-          p_browser: navigator.vendor || "Unknown", 
-          p_ip: "Client", 
-          p_secret: "smoobuds_internal_rpc_secret_2026"
-        });
-        
-        if (rpcData && rpcData.error === 'Account locked') {
-           throw new Error("Account is temporarily locked due to too many failed attempts.");
+      // Authenticate via secure server function to enforce server rate limits and protect audit secrets
+      const res = await loginFn({
+        data: {
+          email,
+          password,
+          device: navigator.userAgent,
+          browser: navigator.vendor || "Unknown",
         }
-        
-        throw new Error(error?.message || "Invalid email or password.");
-      }
-
-      // 2. Link Account (Associates auth.uid() with user_roles record)
-      const { error: linkError } = await supabase.rpc("link_user_account");
-      if (linkError) {
-        console.error("Account linking error:", linkError);
-      }
-
-      // 3. Fetch the corresponding user_roles record
-      const { data: roleData, error: roleError } = await supabase
-        .from("user_roles")
-        .select("status, role, locked_until")
-        .eq("user_id", data.user.id)
-        .maybeSingle();
-
-      if (roleError || !roleData) {
-        await supabase.auth.signOut();
-        throw new Error("Unauthorized. Your email is not pre-authorized.");
-      }
-
-      // 4. Verify Status and Lock
-      if (roleData.status === "Pending") {
-        await supabase.auth.signOut();
-        throw new Error("Account is pending. Please contact the Owner.");
-      }
-      if (roleData.status === "Inactive") {
-        await supabase.auth.signOut();
-        throw new Error("Account is inactive.");
-      }
-      if (roleData.status === "Suspended") {
-        await supabase.auth.signOut();
-        throw new Error("Account is suspended.");
-      }
-      if (roleData.locked_until && new Date(roleData.locked_until) > new Date()) {
-        await supabase.auth.signOut();
-        throw new Error("Account is temporarily locked due to too many failed attempts.");
-      }
-
-      // 5. Record successful login
-      const sessionId = extractSessionId(data.session?.access_token);
-      await supabase.rpc("record_login_attempt", {
-        p_email: email, 
-        p_success: true, 
-        p_device: navigator.userAgent, 
-        p_browser: navigator.vendor || "Unknown", 
-        p_ip: "Client", 
-        p_secret: "smoobuds_internal_rpc_secret_2026",
-        p_session_id: sessionId
       });
 
-      // 6. Redirect to /admin
-      toast.success(`Welcome back! Logged in as ${roleData.role}.`);
-      navigate({ to: "/admin", replace: true });
+      if (res.success && res.session) {
+        // Set the session locally in the browser
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: res.session.access_token,
+          refresh_token: res.session.refresh_token
+        });
 
+        if (sessionError) throw sessionError;
+
+        toast.success(`Welcome back! Logged in as ${res.role}.`);
+        navigate({ to: "/admin", replace: true });
+      }
     } catch (err: any) {
       toast.error(err?.message || "Authentication failed.");
       console.error(err);

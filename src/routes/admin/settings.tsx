@@ -131,6 +131,14 @@ function SettingsPage() {
   const [qrTableCount, setQrTableCount] = useState(settings?.qr_table_count || 10);
   const [themeColor, setThemeColor] = useState(settings?.theme_color || "#4A5D23");
   const [logoUrl, setLogoUrl] = useState(settings?.logo_url || "");
+  const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState((settings as any)?.session_timeout_minutes || 180);
+  const [qrEmergencyDisabled, setQrEmergencyDisabled] = useState((settings as any)?.qr_emergency_disabled || false);
+  const [qrTokenStrength, setQrTokenStrength] = useState((settings as any)?.qr_token_strength || "256-bit");
+  const [lockdownLevel, setLockdownLevel] = useState((settings as any)?.lockdown_level || 0);
+  const [qrRotationSchedule, setQrRotationSchedule] = useState((settings as any)?.qr_rotation_schedule || "Manual only");
+  const [qrRotationGracePeriodMins, setQrRotationGracePeriodMins] = useState((settings as any)?.qr_rotation_grace_period_mins || 15);
+  const [disableLegacyQr, setDisableLegacyQr] = useState((settings as any)?.disable_legacy_qr || false);
+  const [threatLogRetentionDays, setThreatLogRetentionDays] = useState((settings as any)?.threat_log_retention_days || 90);
 
   // UI States
   const [isSaving, setIsSaving] = useState(false);
@@ -185,7 +193,15 @@ function SettingsPage() {
             autoRefreshInterval,
             qrTableCount,
             logoUrl,
-            themeColor
+            themeColor,
+            sessionTimeoutMinutes: Number(sessionTimeoutMinutes),
+            qrEmergencyDisabled,
+            qrTokenStrength,
+            lockdownLevel: Number(lockdownLevel),
+            qrRotationSchedule,
+            qrRotationGracePeriodMins: Number(qrRotationGracePeriodMins),
+            disableLegacyQr,
+            threatLogRetentionDays: Number(threatLogRetentionDays)
           },
           token: sessionToken,
         },
@@ -458,6 +474,136 @@ function SettingsPage() {
                     <div className="w-11 h-6 bg-sage/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sage"></div>
                   </label>
                 </div>
+
+                <div className="flex items-center justify-between p-4 border border-red-200 rounded-xl bg-red-50/50">
+                  <div>
+                    <h4 className="font-display font-bold text-red-800 text-sm">QR Emergency Disable</h4>
+                    <p className="text-[10px] text-red-700/70 mt-1">Instantly disable all QR codes and block scanning/ordering.</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" checked={qrEmergencyDisabled} onChange={(e) => setQrEmergencyDisabled(e.target.checked)} />
+                    <div className="w-11 h-6 bg-red-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-red-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Enterprise Security Section */}
+              <div className="border-t border-sage/10 pt-6 mt-6">
+                <h3 className="font-display font-bold text-sage text-base mb-4 flex items-center gap-2">
+                  <svg className="h-5 w-5 text-sage" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  Enterprise Security & Lockdowns
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Lockdown Level Selector */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">Emergency Lockdown Level</label>
+                    <select
+                      value={lockdownLevel}
+                      onChange={(e) => setLockdownLevel(Number(e.target.value))}
+                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                    >
+                      <option value={0}>Level 0 — Normal Mode</option>
+                      <option value={1}>Level 1 — Block Customer Ordering</option>
+                      <option value={2}>Level 2 — Block Orders + Waiter Calls</option>
+                      <option value={3}>Level 3 — Complete Customer Lockdown</option>
+                    </select>
+                    <p className="text-[10px] text-sage/60 mt-1">Staff and admin portals remain fully active under all levels.</p>
+                  </div>
+
+                  {/* QR Token Strength */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">QR Token Strength</label>
+                    <select
+                      value={qrTokenStrength}
+                      onChange={(e) => {
+                        setQrTokenStrength(e.target.value);
+                        if (e.target.value === "512-bit") {
+                          toast.error("Warning: 512-bit tokens generate highly dense QR codes that are harder to scan on older phone cameras.", { duration: 5000 });
+                        }
+                      }}
+                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                    >
+                      <option value="128-bit">128-bit (Faster scanning)</option>
+                      <option value="256-bit">256-bit (Recommended default)</option>
+                      <option value="512-bit">512-bit (Maximum security)</option>
+                    </select>
+                    {qrTokenStrength === "512-bit" && (
+                      <p className="text-[10px] text-amber-600 mt-1 font-semibold">⚠️ Denser QR codes might affect scanning speeds.</p>
+                    )}
+                  </div>
+
+                  {/* QR Rotation Schedule */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">Auto Token Rotation Schedule</label>
+                    <select
+                      value={qrRotationSchedule}
+                      onChange={(e) => setQrRotationSchedule(e.target.value)}
+                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                    >
+                      <option value="Manual only">Manual only</option>
+                      <option value="Daily">Daily</option>
+                      <option value="Weekly">Weekly</option>
+                      <option value="Monthly">Monthly</option>
+                    </select>
+                  </div>
+
+                  {/* Grace Period Duration */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">Rotation Grace Period (Minutes)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="1440"
+                      required
+                      value={qrRotationGracePeriodMins}
+                      onChange={(e) => setQrRotationGracePeriodMins(Number(e.target.value))}
+                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                    />
+                    <p className="text-[10px] text-sage/60 mt-1">Allows active tables to transition safely during token rotation.</p>
+                  </div>
+
+                  {/* Threat Log Retention Days */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">Threat Logs Retention (Days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      required
+                      value={threatLogRetentionDays}
+                      onChange={(e) => setThreatLogRetentionDays(Number(e.target.value))}
+                      className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                    />
+                  </div>
+
+                  {/* Disable Legacy QR codes */}
+                  <div className="flex items-center justify-between p-4 border border-sage/10 rounded-xl bg-sage/5">
+                    <div>
+                      <h4 className="font-display font-bold text-sage text-sm">Force Signed QR Payloads</h4>
+                      <p className="text-[10px] text-sage/70 mt-1">Disable legacy plain URL parameters to block older stickers completely.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" className="sr-only peer" checked={disableLegacyQr} onChange={(e) => setDisableLegacyQr(e.target.checked)} />
+                      <div className="w-11 h-6 bg-sage/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sage"></div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-sage font-display font-semibold block mb-1">Customer Session Timeout (Minutes)</label>
+                <input
+                  type="number"
+                  min="5"
+                  max="1440"
+                  required
+                  value={sessionTimeoutMinutes}
+                  onChange={(e) => setSessionTimeoutMinutes(Number(e.target.value))}
+                  className="w-full bg-cream/20 border border-sage/10 rounded-xl px-4 py-3 focus:outline-none focus:border-sage focus:bg-white transition-all text-sm font-semibold"
+                />
               </div>
 
               <div>

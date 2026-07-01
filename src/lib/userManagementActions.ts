@@ -1,7 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { createAuthClient, supabase } from "./supabase";
 import { hasPermission, type Permission } from "./permissions";
+import { isIpRateLimited, checkRateLimit } from "./verifyTable";
+
+const INTERNAL_RPC_SECRET = process.env.INTERNAL_RPC_SECRET || "smoobuds_internal_rpc_secret_2026";
 
 // Helper to safely extract session_id from JWT payload
 function extractSessionId(token: string | undefined): string | null {
@@ -106,7 +111,7 @@ async function createAuditLog(
       p_device: "Server Action",
       p_browser: "Node.js",
       p_ip_address: "127.0.0.1",
-      p_secret: "smoobuds_internal_rpc_secret_2026"
+      p_secret: INTERNAL_RPC_SECRET
     });
   } catch (err) {
     console.error("Failed to write audit log:", err);
@@ -434,4 +439,193 @@ export const getLoginHistoryFn = createServerFn({ method: "GET" })
     
     if (error) throw new Error(error.message);
     return history || [];
+  });
+
+export const loginFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      email: z.string().email(),
+      password: z.string().min(1),
+      device: z.string(),
+      browser: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const request = getRequest();
+    if (!request) throw new Error("No request context.");
+
+    const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                     request.headers.get("x-real-ip") ||
+                     "127.0.0.1";
+
+    const emailHash = crypto.createHash("sha256").update(data.email.trim().toLowerCase()).digest("hex");
+
+    // Rate Limit 1: IP rate limit for logins (max 10 attempts per 15 minutes)
+    if (await isIpRateLimited(request, "login_ip", 10, 900)) {
+      throw new Error("Too many login attempts from this IP. Please try again in 15 minutes.");
+    }
+    // Rate Limit 2: Email rate limit (max 5 attempts per 15 minutes)
+    const emailKey = `rate:login_email:${emailHash}`;
+    const emailAllowed = await checkRateLimit(emailKey, 5, 900);
+    if (!emailAllowed) {
+      throw new Error("Too many login attempts for this account. Please try again in 15 minutes.");
+    }
+
+    try {
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      });
+
+      if (authError || !authData.user) {
+        // Record failed attempt
+        await supabase.rpc("record_login_attempt", {
+          p_email: data.email,
+          p_success: false,
+          p_device: data.device,
+          p_browser: data.browser,
+          p_ip: clientIp,
+          p_secret: INTERNAL_RPC_SECRET
+        });
+        throw new Error(authError?.message || "Invalid email or password.");
+      }
+
+      // Fetch user role info
+      const { data: roleData, error: roleError } = await supabase
+        .from("user_roles")
+        .select("status, role, locked_until")
+        .eq("user_id", authData.user.id)
+        .maybeSingle();
+
+      if (roleError || !roleData) {
+        await supabase.auth.signOut();
+        throw new Error("Unauthorized. Your email is not pre-authorized.");
+      }
+
+      // Enforce status checks
+      if (roleData.status === "Pending") {
+        await supabase.auth.signOut();
+        throw new Error("Account is pending. Please contact the Owner.");
+      }
+      if (roleData.status === "Inactive") {
+        await supabase.auth.signOut();
+        throw new Error("Account is inactive.");
+      }
+      if (roleData.status === "Suspended") {
+        await supabase.auth.signOut();
+        throw new Error("Account is suspended.");
+      }
+      if (roleData.locked_until && new Date(roleData.locked_until) > new Date()) {
+        await supabase.auth.signOut();
+        throw new Error("Account is temporarily locked. Please contact the Owner.");
+      }
+
+      // Successful login: record attempt with session_id
+      const sessionId = extractSessionId(authData.session?.access_token);
+      await supabase.rpc("record_login_attempt", {
+        p_email: data.email,
+        p_success: true,
+        p_device: data.device,
+        p_browser: data.browser,
+        p_ip: clientIp,
+        p_secret: INTERNAL_RPC_SECRET,
+        p_session_id: sessionId
+      });
+
+      return {
+        success: true,
+        session: authData.session,
+        role: roleData.role,
+      };
+    } catch (err: any) {
+      throw new Error(err.message || "Authentication failed.");
+    }
+  });
+
+export const signupFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z.object({
+      email: z.string().email(),
+      password: z.string().min(6),
+      device: z.string(),
+      browser: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const request = getRequest();
+    if (!request) throw new Error("No request context.");
+
+    const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                     request.headers.get("x-real-ip") ||
+                     "127.0.0.1";
+
+    // Rate Limit IP for signups (max 5 signups per hour)
+    if (await isIpRateLimited(request, "signup_ip", 5, 3600)) {
+      throw new Error("Too many registrations from this IP. Please try again later.");
+    }
+
+    try {
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password,
+      });
+
+      if (authError || !authData.user) {
+        throw new Error(authError?.message || "Registration failed.");
+      }
+
+      let session = authData.session;
+      if (!session) {
+        // Sign in immediately to get a JWT
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: data.email,
+          password: data.password,
+        });
+        if (signInError) throw new Error(signInError.message);
+        session = signInData.session;
+      }
+
+      if (!session) {
+        throw new Error("Failed to establish session after signup. Please sign in manually.");
+      }
+
+      // Link Account
+      const authClient = createAuthClient(session.access_token);
+      const { data: linkSuccess, error: linkError } = await authClient.rpc("link_user_account");
+      if (linkError) {
+        console.error("Account linking error:", linkError);
+      }
+
+      if (!linkSuccess) {
+        await supabase.auth.signOut();
+        throw new Error("Registration failed. Your email has not been pre-authorized by an Owner.");
+      }
+
+      // Record successful login
+      const sessionId = extractSessionId(session.access_token);
+      await supabase.rpc("record_login_attempt", {
+        p_email: data.email,
+        p_success: true,
+        p_device: data.device,
+        p_browser: data.browser,
+        p_ip: clientIp,
+        p_secret: INTERNAL_RPC_SECRET,
+        p_session_id: sessionId
+      });
+
+      // Fetch role
+      const { data: roleData } = await authClient
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", authData.user.id)
+        .maybeSingle();
+
+      return {
+        success: true,
+        session,
+        role: roleData?.role || "Staff",
+      };
+    } catch (err: any) {
+      throw new Error(err.message || "Registration failed.");
+    }
   });

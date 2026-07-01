@@ -2,14 +2,18 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest, getCookie } from "@tanstack/react-start/server";
 import { redirect } from "@tanstack/react-router";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { supabase } from "./supabase";
 import { 
   verifyTableSession, 
   verifyTableToken, 
-  createTableSession, 
-  isVerifyRateLimited,
-  isOrderRateLimited,
-  isRequestRateLimited,
+  verifyQrPayload,
+  signPayload,
+  isIpRateLimited,
+  generateFingerprint,
+  getIpHash,
+  getSubnet,
+  logSecurityThreat,
   COOKIE_NAME 
 } from "./verifyTable";
 
@@ -41,47 +45,39 @@ export const orderSubmissionSchema = z.object({
   items: z.array(orderItemInputSchema).min(1, { message: "Cart cannot be empty" }),
   idempotencyKey: z.string().uuid({ message: "Invalid idempotency key format" }),
   appliedPromotionId: z.string().uuid({ message: "Invalid promotion ID format" }).optional().nullable(),
+  nonce: z.string().min(1, { message: "Security token (nonce) is required" }),
 });
 
 export const requestSubmissionSchema = z.object({
   requestType: z.enum(["Call Waiter", "Request Bill", "Feedback", "Other"]),
   additionalInfo: z.string().max(300).optional(),
+  nonce: z.string().min(1, { message: "Security token (nonce) is required" }),
 });
 
-// Helper: Parse cookies from header
-function getTableSessionFromRequest(request: Request | undefined): { tableNumber: number } {
-  if (!request) {
-    throw new Error("Request context not found.");
-  }
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookies: Record<string, string> = {};
-  cookieHeader.split(";").forEach((cookie) => {
-    const parts = cookie.split("=");
-    const key = parts.shift()?.trim();
-    if (key) {
-      cookies[key] = decodeURIComponent(parts.join("="));
+// SERVER FUNCTION: Generate session nonce
+export const getNonceFn = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const request = getRequest();
+    if (!request) {
+      throw new Error("No request context.");
     }
-  });
-
-  const session = verifyTableSession(cookies[COOKIE_NAME]);
-  if (!session) {
-    throw new Error("Invalid or expired table session. Please re-scan the QR code at your table.");
-  }
-  return session;
-}
-
-// Helper: Parse cookies
-function parseCookies(header: string) {
-  const list: Record<string, string> = {};
-  header.split(";").forEach((cookie) => {
-    const parts = cookie.split("=");
-    const key = parts.shift()?.trim();
-    if (key) {
-      list[key] = decodeURIComponent(parts.join("="));
+    const cookieValue = getCookie(COOKIE_NAME);
+    const session = await verifyTableSession(cookieValue, request);
+    if (!session) {
+      throw new Error("Invalid or expired table session. Please re-scan QR.");
     }
+
+    const { data: nonce, error } = await supabase.rpc("generate_session_nonce", {
+      p_session_id: session.sessionId,
+      p_session_token: session.sessionToken
+    });
+
+    if (error || !nonce) {
+      throw new Error("Failed to generate security token: " + (error?.message || "Unknown error"));
+    }
+
+    return { nonce };
   });
-  return list;
-}
 
 // SERVER FUNCTION: Verify Menu Access and set Cookie
 export const verifyMenuAccessFn = createServerFn({ method: "GET" })
@@ -89,6 +85,7 @@ export const verifyMenuAccessFn = createServerFn({ method: "GET" })
     z.object({
       table: z.number().optional(),
       token: z.string().optional(),
+      data: z.string().optional(), // Signed QR payload parameter
     }).parse(data)
   )
   .handler(async ({ data }) => {
@@ -97,34 +94,102 @@ export const verifyMenuAccessFn = createServerFn({ method: "GET" })
       return { tableNumber: null, isVerified: false };
     }
 
-    const clientIp =
-      request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-      request.headers.get("x-real-ip") ||
-      "127.0.0.1";
+    // 1. Rate Limiting QR scan attempts
+    if (await isIpRateLimited(request, "verify_qr", 10, 60)) {
+      throw redirect({
+        to: "/menu",
+        search: { error: "rate-limited" },
+      });
+    }
 
-    // Use getCookie() from @tanstack/react-start/server — server-only, no manual parsing
+    // 2. Fetch Cafe Settings to check Emergency Lockdown Levels
+    const { data: settings } = await supabase
+      .from("cafe_settings")
+      .select("qr_emergency_disabled, session_timeout_minutes, lockdown_level, disable_legacy_qr, qr_rotation_grace_period_mins, require_customer_name")
+      .eq("id", 1)
+      .maybeSingle();
+
+    // Level 3 Lockdown: Complete Customer Lockdown
+    if (settings?.lockdown_level === 3 || settings?.qr_emergency_disabled) {
+      throw redirect({
+        to: "/menu",
+        search: { error: "lockdown-maintenance" },
+      });
+    }
+
     const cookieValue = getCookie(COOKIE_NAME);
-    const existingSession = verifyTableSession(cookieValue);
+    const existingSession = await verifyTableSession(cookieValue, request);
 
-    // Scenario 1: Table QR Code Verification
-    if (data.table !== undefined && data.token !== undefined) {
-      if (isVerifyRateLimited(clientIp)) {
+    let scannedTable: number | undefined;
+    let scannedTableId: string | undefined;
+    let scannedToken: string | undefined;
+
+    // A. Check signed payload format first
+    if (data.data) {
+      const payload = verifyQrPayload(data.data);
+      if (!payload) {
+        await logSecurityThreat("Invalid Signature", "High", { signedData: data.data }, request);
         throw redirect({
           to: "/menu",
-          search: { error: "rate-limited" },
+          search: { error: "invalid-signature" },
         });
       }
 
-      const isValid = await verifyTableToken(data.table, data.token);
-      if (isValid) {
-        const sessionCookie = createTableSession(data.table);
+      // Fetch table info
+      const { data: dbTable } = await supabase
+        .from("restaurant_tables")
+        .select("id, table_number, is_active, qr_status, qr_token, previous_qr_token, rotated_at, qr_version")
+        .eq("id", payload.tableId)
+        .maybeSingle();
+
+      if (!dbTable || !dbTable.is_active || dbTable.qr_status !== "Active") {
+        await logSecurityThreat("Token Guessing", "High", { tableId: payload.tableId }, request);
         throw redirect({
           to: "/menu",
-          headers: {
-            "Set-Cookie": `${sessionCookie.name}=${sessionCookie.value}; Path=/; HttpOnly; ${process.env.NODE_ENV === "production" ? "Secure;" : ""} SameSite=Lax; Max-Age=10800`,
-          },
+          search: { error: "invalid-token" },
         });
+      }
+
+      // Verify QR version & grace periods
+      let isTokenValid = false;
+      if (dbTable.qr_version === payload.qrVersion) {
+        isTokenValid = true;
+      } else if (dbTable.qr_version === payload.qrVersion + 1 && dbTable.rotated_at) {
+        const graceExpiry = new Date(dbTable.rotated_at).getTime() + (settings?.qr_rotation_grace_period_mins || 15) * 60 * 1000;
+        if (Date.now() < graceExpiry) {
+          isTokenValid = true;
+        }
+      }
+
+      if (!isTokenValid) {
+        await logSecurityThreat("URL Manipulation", "Medium", { message: "QR Code version expired", qrVersion: payload.qrVersion, dbVersion: dbTable.qr_version }, request);
+        throw redirect({
+          to: "/menu",
+          search: { error: "invalid-token" },
+        });
+      }
+
+      scannedTable = dbTable.table_number;
+      scannedTableId = dbTable.id;
+      scannedToken = dbTable.qr_token;
+    }
+    // B. Check plain token parameter (legacy compatibility)
+    else if (data.table !== undefined && data.token !== undefined) {
+      if (settings?.disable_legacy_qr) {
+        await logSecurityThreat("URL Manipulation", "Medium", { message: "Attempted legacy QR scan when legacy support is disabled" }, request);
+        throw redirect({
+          to: "/menu",
+          search: { error: "legacy-disabled" },
+        });
+      }
+
+      const tableVerifyResult = await verifyTableToken(data.table, data.token);
+      if (tableVerifyResult) {
+        scannedTable = data.table;
+        scannedTableId = tableVerifyResult.tableId;
+        scannedToken = data.token;
       } else {
+        await logSecurityThreat("Token Guessing", "Low", { table: data.table, token: data.token }, request);
         throw redirect({
           to: "/menu",
           search: { error: "invalid-token" },
@@ -135,11 +200,122 @@ export const verifyMenuAccessFn = createServerFn({ method: "GET" })
       }
     }
 
+    // Scenario 1: Table QR Code Scanned successfully
+    if (scannedTable !== undefined && scannedToken !== undefined && scannedTableId !== undefined) {
+      // Session Lock check: If they already have an active session for a DIFFERENT table
+      if (existingSession && existingSession.tableNumber !== scannedTable) {
+        await logSecurityThreat("Session Hijacking", "Medium", { message: "Table switching attempted", currentTable: existingSession.tableNumber, targetTable: scannedTable }, request);
+        throw redirect({
+          to: "/menu",
+          search: { error: "active-session-lock" },
+        });
+      }
+
+      // If they already have an active session for the SAME table, just redirect to /menu (clean URL)
+      if (existingSession && existingSession.tableNumber === scannedTable) {
+        throw redirect({
+          to: "/menu",
+        });
+      }
+
+      // Create secure database dining session
+      const sessionTimeoutMinutes = settings?.session_timeout_minutes || 180;
+      const durationMs = sessionTimeoutMinutes * 60 * 1000;
+      const expiresAt = Date.now() + durationMs;
+      const sessionToken = crypto.randomBytes(32).toString("hex");
+
+      const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                       request.headers.get("x-real-ip") ||
+                       "127.0.0.1";
+      const ipHash = crypto.createHash("sha256").update(clientIp).digest("hex");
+      const subnetHash = crypto.createHash("sha256").update(getSubnet(clientIp)).digest("hex");
+
+      // 1. Fetch or create active Table Session
+      let tableSessionId: string;
+      let displayName = "Guest 1";
+
+      const { data: existingTableSession } = await supabase
+        .from("table_sessions")
+        .select("id, total_devices")
+        .eq("table_id", scannedTableId)
+        .eq("is_active", true)
+        .gt("expires_at", new Date().toISOString())
+        .maybeSingle();
+
+      if (existingTableSession) {
+        tableSessionId = existingTableSession.id;
+        const newDeviceCount = existingTableSession.total_devices + 1;
+        displayName = `Guest ${newDeviceCount}`;
+        
+        await supabase
+          .from("table_sessions")
+          .update({ total_devices: newDeviceCount })
+          .eq("id", tableSessionId);
+      } else {
+        const tableSessionToken = crypto.randomBytes(32).toString("hex");
+        const { data: newTableSession, error: tableSessionError } = await supabase
+          .from("table_sessions")
+          .insert({
+            table_id: scannedTableId,
+            session_token: tableSessionToken,
+            expires_at: new Date(expiresAt).toISOString(),
+            total_devices: 1,
+            total_orders: 0
+          })
+          .select("id")
+          .single();
+
+        if (tableSessionError || !newTableSession) {
+          throw new Error("Failed to initiate table session.");
+        }
+        tableSessionId = newTableSession.id;
+      }
+
+      // 2. Create Device Session
+      const { data: newSession, error: sessionError } = await supabase
+        .from("dining_sessions")
+        .insert({
+          table_id: scannedTableId,
+          table_session_id: tableSessionId,
+          display_name: displayName,
+          is_name_set: false,
+          session_token: sessionToken,
+          browser_fingerprint_hash: generateFingerprint(request),
+          user_agent_hash: crypto.createHash("sha256").update(request.headers.get("user-agent") || "").digest("hex"),
+          expires_at: new Date(expiresAt).toISOString(),
+          client_ip_hash: ipHash,
+          ip_subnet: subnetHash,
+          trust_score: 100,
+        })
+        .select("id")
+        .single();
+
+      if (sessionError || !newSession) {
+        throw new Error("Failed to initiate secure dining session.");
+      }
+
+      const payloadStr = `${newSession.id}:${sessionToken}:${expiresAt}`;
+      const signature = signPayload(payloadStr);
+      const cookieVal = `${payloadStr}:${signature}`;
+
+      throw redirect({
+        to: "/menu",
+        headers: {
+          "Set-Cookie": `${COOKIE_NAME}=${cookieVal}; Path=/; HttpOnly; ${process.env.NODE_ENV === "production" ? "Secure;" : ""} SameSite=Lax; Max-Age=${sessionTimeoutMinutes * 60}`,
+        },
+      });
+    }
+
     // Scenario 2: Active Verified session
     if (existingSession) {
       return {
         tableNumber: existingSession.tableNumber,
         isVerified: true,
+        sessionToken: existingSession.sessionToken,
+        tableSessionId: existingSession.tableSessionId,
+        displayName: existingSession.displayName,
+        isNameSet: existingSession.isNameSet,
+        requireCustomerName: settings?.require_customer_name ?? true,
       };
     }
 
@@ -153,13 +329,14 @@ export const verifyMenuAccessFn = createServerFn({ method: "GET" })
 // SERVER FUNCTION: Fetch session orders securely
 export const fetchSessionOrdersFn = createServerFn({ method: "GET" })
   .handler(async () => {
-    try {
-      // getCookie() is server-only — reads from the incoming request's Cookie header
-      const cookieValue = getCookie(COOKIE_NAME);
-      const session = verifyTableSession(cookieValue);
-      if (!session) return [] as Order[];
+    const request = getRequest();
+    if (!request) return [] as Order[];
 
-      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    try {
+      const cookieValue = getCookie(COOKIE_NAME);
+      const session = await verifyTableSession(cookieValue, request);
+      if (!session || !session.tableSessionId) return [] as Order[];
+
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
         .select(`
@@ -167,6 +344,7 @@ export const fetchSessionOrdersFn = createServerFn({ method: "GET" })
           status,
           total_amount,
           created_at,
+          customer_name,
           order_items (
             id,
             item_name,
@@ -175,8 +353,7 @@ export const fetchSessionOrdersFn = createServerFn({ method: "GET" })
             notes
           )
         `)
-        .eq("table_number", session.tableNumber)
-        .gte("created_at", threeHoursAgo)
+        .eq("table_session_id", session.tableSessionId)
         .order("created_at", { ascending: false });
 
       if (!ordersError && ordersData) {
@@ -188,146 +365,72 @@ export const fetchSessionOrdersFn = createServerFn({ method: "GET" })
     return [] as Order[];
   });
 
-// SERVER FUNCTION: Place Order
+// SERVER FUNCTION: Place Order via Secure PostgreSQL Transaction
 export const placeOrderFn = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => {
-    console.log("PLACE_ORDER_FN_STARTED");
-    const res = orderSubmissionSchema.parse(data);
-    console.log("VALIDATION_PASSED");
-    return res;
-  })
+  .inputValidator((data: unknown) => orderSubmissionSchema.parse(data))
   .handler(async ({ data }) => {
     const request = getRequest();
-    
-    // IP Rate Limiting
-    const clientIp =
-      request?.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-      request?.headers.get("x-real-ip") ||
-      "127.0.0.1";
+    if (!request) {
+      throw new Error("No request context.");
+    }
 
-    if (isOrderRateLimited(clientIp)) {
+    // 1. IP Rate Limiting
+    if (await isIpRateLimited(request, "place_order", 3, 60)) {
       throw new Error("Rate limit exceeded. Please wait before placing another order.");
     }
 
-    const { tableNumber } = getTableSessionFromRequest(request);
-    console.log("SESSION_VALIDATED");
-
-    const { items, idempotencyKey, appliedPromotionId } = data;
-
-    // 1. Check if order with this idempotency key already exists (Duplicate Protection)
-    const { data: existingOrder, error: checkError } = await supabase
-      .from("orders")
-      .select("id, status")
-      .eq("idempotency_key", idempotencyKey)
+    // 2. Fetch Lockdown Status
+    const { data: settings } = await supabase
+      .from("cafe_settings")
+      .select("lockdown_level")
+      .eq("id", 1)
       .maybeSingle();
 
-    if (checkError) {
-      throw new Error(`Database error during idempotency check: ${checkError.message}`);
+    // Level 1+ Lockdown: Customer Ordering Disabled
+    if (settings && settings.lockdown_level >= 1) {
+      throw new Error("Ordering is temporarily disabled due to system security lockdown.");
     }
 
-    if (existingOrder) {
-      return {
-        success: true,
-        orderId: existingOrder.id,
-        status: existingOrder.status,
-        isDuplicate: true,
-      };
+    // 3. Validate Session
+    const cookieValue = getCookie(COOKIE_NAME);
+    const session = await verifyTableSession(cookieValue, request);
+    if (!session) {
+      throw new Error("Invalid or expired table session. Please re-scan QR.");
     }
 
-    // 2. Fetch and Validate Menu Items (Prices & Availability) from Database
-    const itemIds = items.map((i) => i.id);
-    const { data: dbItems, error: itemsError } = await supabase
-      .from("menu_items")
-      .select("id, name, price, is_available")
-      .in("id", itemIds);
+    const { items, idempotencyKey, appliedPromotionId, nonce } = data;
 
-    if (itemsError || !dbItems) {
-      throw new Error("Failed to fetch menu items from database for validation.");
-    }
-
-    const dbItemsMap = new Map(dbItems.map((item) => [item.id, item]));
-
-    // Check availability
-    for (const clientItem of items) {
-      const dbItem = dbItemsMap.get(clientItem.id);
-      if (!dbItem) {
-        throw new Error(`One or more items in your cart do not exist in the menu.`);
-      }
-      if (!dbItem.is_available) {
-        throw new Error(`"${dbItem.name}" is currently out of stock. Please remove it from your cart before ordering.`);
-      }
-    }
-
-    // 3. Recalculate prices
-    let totalAmount = 0;
-    const orderItemsToInsert = items.map((clientItem) => {
-      const dbItem = dbItemsMap.get(clientItem.id)!;
-      const itemTotal = dbItem.price * clientItem.quantity;
-      totalAmount += itemTotal;
-
-      return {
-        item_name: dbItem.name,
-        quantity: clientItem.quantity,
-        item_price: dbItem.price,
-        notes: clientItem.notes || null,
-      };
+    // 4. Call Database RPC Transaction (Fully verifies availability, prices, active status, and nonces)
+    const { data: result, error } = await supabase.rpc("submit_customer_order", {
+      p_session_id: session.sessionId,
+      p_session_token: session.sessionToken,
+      p_idempotency_key: idempotencyKey,
+      p_applied_promotion_id: appliedPromotionId || null,
+      p_items: JSON.stringify(items),
+      p_nonce: nonce
     });
 
-    console.log("DB_INSERT_STARTED");
-    // 4. Insert Order
-    const { data: newOrder, error: orderInsertError } = await supabase
-      .from("orders")
-      .insert({
-        table_number: tableNumber,
-        total_amount: totalAmount,
-        status: "Pending",
-        idempotency_key: idempotencyKey,
-        applied_promotion_id: appliedPromotionId || null,
-      })
-      .select("id")
-      .single();
-
-    if (orderInsertError) {
-      if (orderInsertError.code === "23505") {
-        const { data: reCheckOrder } = await supabase
-          .from("orders")
-          .select("id, status")
-          .eq("idempotency_key", idempotencyKey)
-          .single();
-        if (reCheckOrder) {
-          return {
-            success: true,
-            orderId: reCheckOrder.id,
-            status: reCheckOrder.status,
-            isDuplicate: true,
-          };
-        }
-      }
-      throw new Error(`Failed to create order: ${orderInsertError.message}`);
+    if (error || !result) {
+      throw new Error(error?.message || "Order submission database transaction failed.");
     }
 
-    console.log("DB_INSERT_SUCCESS");
-
-    // 5. Insert Order Items
-    const itemsWithOrderId = orderItemsToInsert.map((item) => ({
-      ...item,
-      order_id: newOrder.id,
-    }));
-
-    const { error: itemsInsertError } = await supabase
-      .from("order_items")
-      .insert(itemsWithOrderId);
-
-    if (itemsInsertError) {
-      await supabase.from("orders").delete().eq("id", newOrder.id);
-      throw new Error(`Failed to save items for your order: ${itemsInsertError.message}`);
+    const rpcRes = result as any;
+    if (rpcRes.error) {
+      throw new Error(rpcRes.error);
     }
+
+    // Broadcast change to realtime channel securely
+    await supabase.channel(`session_${session.tableSessionId}`).send({
+      type: "broadcast",
+      event: "order_updated",
+      payload: { orderId: rpcRes.orderId, status: rpcRes.status }
+    });
 
     return {
       success: true,
-      orderId: newOrder.id,
-      status: "Pending",
-      isDuplicate: false,
+      orderId: rpcRes.orderId,
+      status: rpcRes.status,
+      isDuplicate: !!rpcRes.isDuplicate,
     };
   });
 
@@ -336,38 +439,126 @@ export const submitTableRequestFn = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => requestSubmissionSchema.parse(data))
   .handler(async ({ data }) => {
     const request = getRequest();
+    if (!request) {
+      throw new Error("No request context.");
+    }
 
-    // IP Rate Limiting
-    const clientIp =
-      request?.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-      request?.headers.get("x-real-ip") ||
-      "127.0.0.1";
-
-    if (isRequestRateLimited(clientIp)) {
+    // 1. IP Rate Limiting
+    if (await isIpRateLimited(request, "table_request", 5, 60)) {
       throw new Error("Rate limit exceeded. Please wait before sending another request.");
     }
 
-    const { tableNumber } = getTableSessionFromRequest(request);
+    // 2. Fetch Lockdown Status
+    const { data: settings } = await supabase
+      .from("cafe_settings")
+      .select("lockdown_level")
+      .eq("id", 1)
+      .maybeSingle();
 
-    const { requestType, additionalInfo } = data;
+    // Level 2+ Lockdown: Waiter Requests Disabled
+    if (settings && settings.lockdown_level >= 2) {
+      throw new Error("Requests are temporarily disabled due to system security lockdown.");
+    }
 
-    const { data: newRequest, error } = await supabase
-      .from("table_requests")
-      .insert({
-        table_number: tableNumber,
-        request_type: requestType,
-        additional_info: additionalInfo || null,
-        status: "Pending",
-      })
-      .select("id")
-      .single();
+    // 3. Validate Session
+    const cookieValue = getCookie(COOKIE_NAME);
+    const session = await verifyTableSession(cookieValue, request);
+    if (!session) {
+      throw new Error("Invalid or expired table session. Please re-scan QR.");
+    }
 
-    if (error) {
-      throw new Error(`Failed to send request: ${error.message}`);
+    const { requestType, additionalInfo, nonce } = data;
+
+    // 4. Call Database RPC Transaction
+    const { data: result, error } = await supabase.rpc("submit_table_request", {
+      p_session_id: session.sessionId,
+      p_session_token: session.sessionToken,
+      p_request_type: requestType,
+      p_additional_info: additionalInfo || null,
+      p_nonce: nonce
+    });
+
+    if (error || !result) {
+      throw new Error(error?.message || "Table request failed.");
+    }
+
+    const rpcRes = result as any;
+    if (rpcRes.error) {
+      throw new Error(rpcRes.error);
     }
 
     return {
       success: true,
-      requestId: newRequest.id,
+      requestId: rpcRes.requestId,
     };
+  });
+
+// SERVER FUNCTION: Set Customer Name
+export const setCustomerNameFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      name: z.string().min(2).max(40).trim(),
+      forceAppend: z.boolean().optional(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const request = getRequest();
+    if (!request) {
+      throw new Error("No request context.");
+    }
+
+    if (await isIpRateLimited(request, "set_customer_name", 10, 60)) {
+      throw new Error("Rate limit exceeded. Please wait.");
+    }
+
+    const cookieValue = getCookie(COOKIE_NAME);
+    const session = await verifyTableSession(cookieValue, request);
+    if (!session) {
+      throw new Error("Invalid or expired table session.");
+    }
+
+    // Sanitize input
+    const sanitizedName = data.name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const { data: result, error } = await supabase.rpc("set_customer_name", {
+      p_session_id: session.sessionId,
+      p_session_token: session.sessionToken,
+      p_name: sanitizedName,
+      p_force_append: data.forceAppend || false
+    });
+
+    if (error || !result) {
+      throw new Error(error?.message || "Failed to set customer name.");
+    }
+
+    const rpcRes = result as any;
+    if (rpcRes.error) {
+      throw new Error(rpcRes.error);
+    }
+
+    return rpcRes; // { success, isDuplicate, suggestedName, displayName }
+  });
+
+// SERVER FUNCTION: Leave Table Session
+export const leaveTableSessionFn = createServerFn({ method: "POST" })
+  .handler(async () => {
+    const request = getRequest();
+    if (!request) return { success: false };
+
+    const cookieValue = getCookie(COOKIE_NAME);
+    const session = await verifyTableSession(cookieValue, request);
+    
+    if (session) {
+      await supabase
+        .from("dining_sessions")
+        .update({ is_active: false })
+        .eq("id", session.sessionId);
+    }
+
+    throw redirect({
+      to: "/menu",
+      headers: {
+        "Set-Cookie": `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+      },
+    });
   });

@@ -22,7 +22,7 @@ import {
   Coffee
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { placeOrderFn, submitTableRequestFn, verifyMenuAccessFn, fetchSessionOrdersFn } from "@/lib/orderActions";
+import { placeOrderFn, submitTableRequestFn, verifyMenuAccessFn, fetchSessionOrdersFn, getNonceFn, setCustomerNameFn, leaveTableSessionFn } from "@/lib/orderActions";
 import { toast } from "sonner";
 import { MenuPagePromotionBanner, CheckoutPromotionBanner } from "@/components/promotions/PromotionsEngine";
 
@@ -30,6 +30,7 @@ import { MenuPagePromotionBanner, CheckoutPromotionBanner } from "@/components/p
 const menuSearchSchema = z.object({
   table: z.coerce.number().int().positive().optional(),
   token: z.string().optional(),
+  data: z.string().optional(),
   error: z.string().optional(),
 });
 
@@ -66,6 +67,7 @@ interface Order {
   status: "Pending" | "Accepted" | "Preparing" | "Ready" | "Served" | "Cancelled";
   total_amount: number;
   created_at: string;
+  customer_name?: string;
   order_items: OrderItem[];
 }
 
@@ -112,7 +114,7 @@ export const Route = createFileRoute("/menu")({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps: search }) => {
     const sessionStatus = await verifyMenuAccessFn({
-      data: { table: search.table, token: search.token },
+      data: { table: search.table, token: search.token, data: search.data },
     });
 
     let menuItems: MenuItem[] = [];
@@ -133,6 +135,11 @@ export const Route = createFileRoute("/menu")({
     return {
       tableNumber: sessionStatus.tableNumber,
       isVerified: sessionStatus.isVerified,
+      sessionToken: (sessionStatus as any).sessionToken || null,
+      tableSessionId: (sessionStatus as any).tableSessionId || null,
+      displayName: (sessionStatus as any).displayName || null,
+      isNameSet: (sessionStatus as any).isNameSet || false,
+      requireCustomerName: (sessionStatus as any).requireCustomerName || false,
       error: search.error || null,
       menuItems,
     };
@@ -243,7 +250,7 @@ function ConfettiCelebration() {
 
 function MenuPage() {
   const router = useRouter();
-  const { tableNumber, isVerified, error, menuItems } = Route.useLoaderData();
+  const { tableNumber, isVerified, error, menuItems, sessionToken, tableSessionId, displayName, isNameSet, requireCustomerName } = Route.useLoaderData();
 
   const [sessionOrders, setSessionOrders] = useState<Order[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -257,6 +264,12 @@ function MenuPage() {
   const [isCallingWaiter, setIsCallingWaiter] = useState(false);
   const [isRequestingBill, setIsRequestingBill] = useState(false);
   const [placedOrder, setPlacedOrder] = useState<{ id: string; total: number } | null>(null);
+
+  const [showNameModal, setShowNameModal] = useState(isVerified && requireCustomerName && !isNameSet);
+  const [tempName, setTempName] = useState("");
+  const [isSubmittingName, setIsSubmittingName] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [activeDisplayName, setActiveDisplayName] = useState(displayName);
 
   const cartLocalStorageKey = tableNumber ? `smoobuds_cart_table_${tableNumber}` : "";
 
@@ -299,18 +312,13 @@ function MenuPage() {
   }, [cart.length]);
 
   useEffect(() => {
-    if (!isVerified || !tableNumber) return;
+    if (!isVerified || !tableSessionId) return;
 
     const channel = supabase
-      .channel(`table_orders_realtime_${tableNumber}`)
+      .channel(`session_${tableSessionId}`)
       .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "orders",
-          filter: `table_number=eq.${tableNumber}`,
-        },
+        "broadcast",
+        { event: "order_updated" },
         () => {
           fetchSessionOrdersFn().then((data) => setSessionOrders(data));
         }
@@ -320,7 +328,7 @@ function MenuPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [isVerified, tableNumber]);
+  }, [isVerified, tableSessionId]);
 
   const addToCart = (item: MenuItem) => {
     setCart((prev) => {
@@ -408,11 +416,16 @@ function MenuPage() {
 
       const promoId = localStorage.getItem("smoobuds_applied_promo_id");
       console.log("CALLING_PLACE_ORDER_FN", { promoId });
+      
+      // Fetch dynamic single-use nonce for replay protection
+      const { nonce } = await getNonceFn();
+
       const response = await placeOrderFn({
         data: {
           items: itemsPayload,
           idempotencyKey,
           appliedPromotionId: promoId || undefined,
+          nonce,
         },
       });
 
@@ -455,9 +468,13 @@ function MenuPage() {
 
     const loaderToast = toast.loading(`Sending request: ${type}...`);
     try {
+      // Fetch dynamic single-use nonce for replay protection
+      const { nonce } = await getNonceFn();
+
       const response = await submitTableRequestFn({
         data: {
           requestType: type,
+          nonce,
         },
       });
       if (response.success) {
@@ -470,6 +487,43 @@ function MenuPage() {
     } finally {
       if (isWaiter) setIsCallingWaiter(false);
       else setIsRequestingBill(false);
+    }
+  };
+
+  const handleSubmitName = async (forceAppend: boolean = false) => {
+    if (!tempName.trim() || tempName.length < 2) {
+      setNameError("Please enter a valid name (min 2 characters).");
+      return;
+    }
+    setNameError("");
+    setIsSubmittingName(true);
+    try {
+      const res = await setCustomerNameFn({ data: { name: tempName, forceAppend } });
+      if (res.isDuplicate && !forceAppend) {
+        setNameError(`Name is taken at this table. Continue as "${res.suggestedName}"?`);
+        setTempName(res.suggestedName);
+        setIsSubmittingName(false);
+        return;
+      }
+      if (res.success) {
+        setActiveDisplayName(res.displayName);
+        setShowNameModal(false);
+        toast.success(`Welcome, ${res.displayName}!`);
+      }
+    } catch (err: any) {
+      setNameError(err?.message || "Failed to save name.");
+    } finally {
+      setIsSubmittingName(false);
+    }
+  };
+
+  const handleLeaveTable = async () => {
+    if (confirm("Are you sure you want to leave the table? This will end your ordering session.")) {
+      try {
+        await leaveTableSessionFn();
+      } catch (err) {
+        // Redirection throws, which is expected.
+      }
     }
   };
 
@@ -518,6 +572,14 @@ function MenuPage() {
                 <Receipt size={18} className={isRequestingBill ? "animate-pulse" : ""} />
                 <span className="hidden sm:inline ml-2 text-[0.65rem] uppercase tracking-wider font-display font-semibold">Bill</span>
               </button>
+              <button
+                onClick={handleLeaveTable}
+                className="flex items-center justify-center min-w-[44px] min-h-[44px] sm:px-4 bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/20 rounded-full transition-all duration-300"
+                aria-label="Leave Table"
+              >
+                <X size={18} />
+                <span className="hidden sm:inline ml-2 text-[0.65rem] uppercase tracking-wider font-display font-semibold">Leave</span>
+              </button>
             </div>
           ) : (
             <div className="w-[88px] sm:w-[150px]"></div>
@@ -539,6 +601,11 @@ function MenuPage() {
               <p>
                 {error === "invalid-token" && "The scanned table QR code has expired or is invalid. Please contact staff."}
                 {error === "rate-limited" && "Too many verification requests. Please wait a moment and try again."}
+                {error === "active-session-lock" && "You already have an active dining session."}
+                {error === "qr-emergency-disabled" && "Ordering is temporarily disabled. Please scan again later."}
+                {error === "lockdown-maintenance" && "Ordering is temporarily disabled due to system security lockdown."}
+                {error === "invalid-signature" && "Invalid secure payload signature detected. Re-scan table QR."}
+                {error === "legacy-disabled" && "Legacy plain QR scanning is disabled. Please scan a new signed QR code."}
               </p>
             </motion.div>
           )}
@@ -552,8 +619,12 @@ function MenuPage() {
               <div className="absolute inset-0 bg-radial-glow opacity-40" />
               <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
                 <div>
-                  <div className="flex items-center gap-2 bg-gold/20 text-gold rounded-full px-3 py-1.5 text-[0.65rem] uppercase tracking-[0.2em] w-fit font-display font-bold mb-4 shadow-sm border border-gold/10">
-                    <Check size={12} /> Active Dine-In
+                  <div 
+                    onClick={() => setShowNameModal(true)}
+                    className="cursor-pointer flex items-center gap-2 bg-gold/20 text-gold rounded-full px-3 py-1.5 text-[0.65rem] uppercase tracking-[0.2em] w-fit font-display font-bold mb-4 shadow-sm border border-gold/10 hover:bg-gold/30 transition-colors"
+                    title="Click to rename"
+                  >
+                    <Check size={12} /> Active Dine-In {activeDisplayName ? `• ${activeDisplayName}` : ""}
                   </div>
                   <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight leading-tight">
                     Welcome to <br className="sm:hidden" />
@@ -721,13 +792,18 @@ function MenuPage() {
                   className="bg-white/60 border border-sage/10 rounded-[2rem] p-6 backdrop-blur-sm relative shadow-sm"
                 >
                   <div className="flex justify-between items-start mb-4 border-b border-sage/5 pb-4">
-                    <div>
-                      <p className="text-[0.65rem] uppercase tracking-widest text-sage-deep/60 font-display font-bold mb-1">
-                        {idx === 0 ? "★ Current Order" : "Past Order"}
-                      </p>
-                      <p className="text-[0.75rem] font-medium text-sage-deep/80">
-                        Placed at {new Date(ord.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-sage/10 flex items-center justify-center text-sage font-display font-extrabold text-lg">
+                        {(ord.customer_name || "?").charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-[0.65rem] uppercase tracking-widest text-sage-deep/60 font-display font-bold mb-1">
+                          {idx === 0 ? "★ Current Order" : "Past Order"} • {ord.customer_name}
+                        </p>
+                        <p className="text-[0.75rem] font-medium text-sage-deep/80">
+                          Placed at {new Date(ord.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
                     </div>
                     <span 
                       className={`text-[0.65rem] uppercase tracking-widest font-display font-bold px-4 py-1.5 rounded-full ${
@@ -1040,6 +1116,83 @@ function MenuPage() {
                 <p className="text-[9px] text-sage-deep/50 tracking-wider">
                   You can view your active order and its progress in "Your Session Orders" below.
                 </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Welcome / Set Name Modal */}
+      <AnimatePresence>
+        {showNameModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.9, y: 20, opacity: 0 }}
+              className="bg-cream rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-luxe border border-sage/10 relative overflow-hidden"
+            >
+              <h2 className="font-display font-extrabold text-2xl text-sage-deep mb-2">
+                Welcome to SmooBuds 👋
+              </h2>
+              <p className="text-sm text-sage-deep/80 mb-6">
+                Please enter your name so our staff can identify your orders.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-display font-bold uppercase tracking-widest text-sage/70 mb-2">
+                    Your Name
+                  </label>
+                  <input
+                    type="text"
+                    value={tempName}
+                    onChange={(e) => setTempName(e.target.value)}
+                    placeholder="e.g. Dinesh"
+                    maxLength={40}
+                    className="w-full bg-white/80 border border-sage/15 rounded-2xl px-4 py-3.5 text-sage-deep font-medium focus:outline-none focus:border-sage focus:ring-4 focus:ring-sage/5 transition-all shadow-sm"
+                  />
+                  {nameError && (
+                    <p className="mt-2 text-xs text-destructive font-medium">
+                      {nameError}
+                    </p>
+                  )}
+                </div>
+
+                {nameError && nameError.includes("Continue as") ? (
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button
+                      onClick={() => handleSubmitName(true)}
+                      disabled={isSubmittingName}
+                      className="w-full bg-sage hover:bg-sage-deep text-cream font-display font-extrabold tracking-widest text-xs uppercase py-3.5 rounded-full border border-white/10 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                    >
+                      {isSubmittingName ? "Saving..." : `Continue as "${tempName}"`}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setNameError("");
+                        setTempName("");
+                      }}
+                      disabled={isSubmittingName}
+                      className="w-full bg-white text-sage-deep font-display font-bold tracking-widest text-xs uppercase py-3.5 rounded-full border border-sage/15 transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                    >
+                      Choose another name
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => handleSubmitName(false)}
+                    disabled={isSubmittingName}
+                    className="w-full bg-sage hover:bg-sage-deep text-cream font-display font-extrabold tracking-widest text-xs uppercase py-4 rounded-full border border-white/10 transition-all shadow-luxe active:scale-95 mt-4 disabled:opacity-50"
+                  >
+                    {isSubmittingName ? "Saving..." : "Start Ordering"}
+                  </button>
+                )}
               </div>
             </motion.div>
           </motion.div>

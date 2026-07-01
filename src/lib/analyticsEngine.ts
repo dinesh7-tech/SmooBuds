@@ -51,7 +51,7 @@ export interface AnalyticsPayload {
   trendData: { name: string; orders: number; revenue: number }[];
 }
 
-export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promise<AnalyticsPayload> {
+export async function fetchAnalyticsData(authClient: any, fromDate?: Date, toDate?: Date): Promise<AnalyticsPayload> {
   const now = new Date();
 
   // 1. Calculate selected range bounds
@@ -59,7 +59,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   const rangeEnd = toDate ? endOfDay(toDate) : endOfDay(now);
 
   // 2. Fetch orders in the selected range (detailed query, optimized for date range)
-  const { data: rangeOrders, error: rangeError } = await supabase
+  const { data: rangeOrders, error: rangeError } = await authClient
     .from("orders")
     .select(`
       id,
@@ -86,7 +86,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
 
   // 3. Fetch comparison data (aggregated columns only, lightweight query)
   const compStart = startOfMonth(subMonths(now, 1));
-  const { data: compOrders, error: compError } = await supabase
+  const { data: compOrders, error: compError } = await authClient
     .from("orders")
     .select("total_amount, status, created_at")
     .gte("created_at", compStart.toISOString())
@@ -97,22 +97,22 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   }
 
   // 4. Fetch table tokens from restaurant_tables to display table session tokens
-  const { data: tables } = await supabase
+  const { data: tables } = await authClient
     .from("restaurant_tables")
     .select("table_number, token");
 
   const tableTokenMap: Record<number, string> = {};
   if (tables) {
-    tables.forEach((t) => {
+    tables.forEach((t: any) => {
       tableTokenMap[t.table_number] = t.token;
     });
   }
 
   // 5. Fetch menu items to compile item-to-category mapping
-  const { data: menuList } = await supabase.from("menu_items").select("name, category");
+  const { data: menuList } = await authClient.from("menu_items").select("name, category");
   const itemToCategoryMap: Record<string, string> = {};
   if (menuList) {
-    menuList.forEach((item) => {
+    menuList.forEach((item: any) => {
       itemToCategoryMap[item.name] = item.category;
     });
   }
@@ -135,7 +135,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   const statusCountsGlobal = { Pending: 0, Preparing: 0, Ready: 0, Served: 0, Accepted: 0, Cancelled: 0 };
 
   if (compOrders) {
-    compOrders.forEach((order) => {
+    compOrders.forEach((order: any) => {
       const orderTime = new Date(order.created_at).getTime();
       const orderTotal = Number(order.total_amount);
       const isCancelled = order.status === "Cancelled";
@@ -212,7 +212,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   const ordersList: any[] = [];
 
   if (rangeOrders) {
-    rangeOrders.forEach((order) => {
+    rangeOrders.forEach((order: any) => {
       const orderDate = new Date(order.created_at);
       const orderTime = orderDate.getTime();
       const orderTotal = Number(order.total_amount);
@@ -358,7 +358,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
     last7DaysMap[format(d, 'MMM dd')] = { orders: 0, revenue: 0 };
   }
   if (compOrders) {
-    compOrders.forEach((order) => {
+    compOrders.forEach((order: any) => {
       const orderDate = new Date(order.created_at);
       const orderTime = orderDate.getTime();
       const orderTotal = Number(order.total_amount);
@@ -382,7 +382,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
     monthlyMap[format(d, 'MMM yyyy')] = 0;
   }
   if (compOrders) {
-    compOrders.forEach((order) => {
+    compOrders.forEach((order: any) => {
       const orderDate = new Date(order.created_at);
       const orderTotal = Number(order.total_amount);
       if (order.status !== "Cancelled") {
@@ -403,7 +403,7 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   // Find highest revenue day in range
   const dailyRevenueMap: Record<string, number> = {};
   if (rangeOrders) {
-    rangeOrders.forEach((o) => {
+    rangeOrders.forEach((o: any) => {
       if (o.status !== "Cancelled") {
         const dayStr = format(new Date(o.created_at), 'yyyy-MM-dd');
         dailyRevenueMap[dayStr] = (dailyRevenueMap[dayStr] || 0) + Number(o.total_amount);
@@ -472,10 +472,10 @@ export async function fetchAnalyticsData(fromDate?: Date, toDate?: Date): Promis
   };
 }
 
-export async function fetchLiveDashboardStats() {
+export async function fetchLiveDashboardStats(authClient: any) {
   const startToday = startOfDay(new Date()).getTime();
 
-  const { data: todayOrders, error } = await supabase
+  const { data: todayOrders, error } = await authClient
     .from("orders")
     .select("total_amount, status, created_at")
     .gte("created_at", new Date(startToday).toISOString());
@@ -489,7 +489,7 @@ export async function fetchLiveDashboardStats() {
   let ready = 0;
 
   if (todayOrders) {
-    todayOrders.forEach(o => {
+    todayOrders.forEach((o: any) => {
       if (o.status === "Pending") pending++;
       else if (o.status === "Preparing") preparing++;
       else if (o.status === "Ready") ready++;

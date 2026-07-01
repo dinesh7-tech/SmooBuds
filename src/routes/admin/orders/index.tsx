@@ -32,6 +32,7 @@ interface Order {
   total_amount: number;
   status: "Pending" | "Accepted" | "Preparing" | "Ready" | "Served" | "Cancelled";
   created_at: string;
+  customer_name?: string;
   order_items: OrderItem[];
 }
 
@@ -66,6 +67,7 @@ function OrdersManagementPage() {
           total_amount,
           status,
           created_at,
+          customer_name,
           order_items (
             id,
             item_name,
@@ -217,6 +219,9 @@ function OrdersManagementPage() {
                   T{order.table_number}
                 </div>
                 <div>
+                  <span className="text-sm font-display font-bold text-sage-deep block">
+                    {order.customer_name ? order.customer_name : `Table ${order.table_number}`}
+                  </span>
                   <span className="text-[10px] text-sage/60 font-mono block truncate max-w-[120px]" title={order.id}>
                     ID: #{order.id.slice(0, 8)}
                   </span>

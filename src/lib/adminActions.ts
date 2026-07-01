@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { supabase, createAuthClient } from "./supabase";
+import { fetchAnalyticsData, fetchLiveDashboardStats } from "./analyticsEngine";
 
 
 // 1. Zod Validation Schemas
@@ -47,6 +49,14 @@ const settingsInputSchema = z.object({
   qrTableCount: z.number().int().min(1).max(100).default(10),
   logoUrl: z.string().url().or(z.literal("")).optional().nullable(),
   themeColor: z.string().max(20).default("#4A5D23"),
+  sessionTimeoutMinutes: z.number().int().min(5).max(1440).default(180),
+  qrEmergencyDisabled: z.boolean().default(false),
+  qrTokenStrength: z.enum(["128-bit", "256-bit", "512-bit"]).default("256-bit"),
+  lockdownLevel: z.number().int().min(0).max(3).default(0),
+  qrRotationSchedule: z.enum(["Daily", "Weekly", "Monthly", "Manual only"]).default("Manual only"),
+  qrRotationGracePeriodMins: z.number().int().min(1).max(1440).default(15),
+  disableLegacyQr: z.boolean().default(false),
+  threatLogRetentionDays: z.number().int().min(1).max(365).default(90),
 });
 
 import { hasPermission, type Permission } from "./permissions";
@@ -402,6 +412,21 @@ export const deleteMenuItemFn = createServerFn({ method: "POST" })
     }
   });
 
+// Helper to retrieve configured token byte length
+async function getQrTokenBytesLength(authClient: any): Promise<number> {
+  try {
+    const { data: settings } = await authClient
+      .from("cafe_settings")
+      .select("qr_token_strength")
+      .eq("id", 1)
+      .maybeSingle();
+    const strength = settings?.qr_token_strength || "256-bit";
+    return strength === "128-bit" ? 16 : strength === "512-bit" ? 64 : 32;
+  } catch {
+    return 32; // Fallback to 256-bit
+  }
+}
+
 // 4. SERVER FUNCTIONS: Table & QR Management
 export const saveTableFn = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => 
@@ -416,11 +441,9 @@ export const saveTableFn = createServerFn({ method: "POST" })
     // RBAC: Only Owner can manage tables
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
-    // Generate secure token (8 random alphanumeric characters) — Web Crypto API
-    const secureToken = Array.from(crypto.getRandomValues(new Uint8Array(6)))
-      .map(b => b.toString(36)).join("").slice(0, 8);
-
     const authClient = createAuthClient(token);
+    const bytesCount = await getQrTokenBytesLength(authClient);
+    const secureToken = crypto.randomBytes(bytesCount).toString("hex");
 
     const { data: existingTable } = await authClient
       .from("restaurant_tables")
@@ -443,8 +466,10 @@ export const saveTableFn = createServerFn({ method: "POST" })
         .from("restaurant_tables")
         .insert({
           table_number: payload.tableNumber,
-          token: secureToken,
+          qr_token: secureToken,
           is_active: payload.isActive,
+          qr_status: "Active",
+          qr_version: 1,
         });
       if (error) throw new Error(error.message);
 
@@ -465,14 +490,29 @@ export const regenerateTableTokenFn = createServerFn({ method: "POST" })
     const { tableNumber, token } = data;
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
-    // Generate secure token — Web Crypto API
-    const newSecureToken = Array.from(crypto.getRandomValues(new Uint8Array(6)))
-      .map(b => b.toString(36)).join("").slice(0, 8);
-
     const authClient = createAuthClient(token);
+    const bytesCount = await getQrTokenBytesLength(authClient);
+    const newSecureToken = crypto.randomBytes(bytesCount).toString("hex");
+
+    // Fetch existing token and version to rotate gracefully
+    const { data: currentTable } = await authClient
+      .from("restaurant_tables")
+      .select("qr_token, qr_version")
+      .eq("table_number", tableNumber)
+      .single();
+
+    const nextVersion = (currentTable?.qr_version || 1) + 1;
+    const previousToken = currentTable?.qr_token || null;
+
     const { error } = await authClient
       .from("restaurant_tables")
-      .update({ token: newSecureToken })
+      .update({ 
+        qr_token: newSecureToken,
+        previous_qr_token: previousToken,
+        rotated_at: new Date().toISOString(),
+        qr_version: nextVersion,
+        qr_last_rotated_at: new Date().toISOString()
+      })
       .eq("table_number", tableNumber);
 
     if (error) throw new Error(error.message);
@@ -493,15 +533,18 @@ export const regenerateAllTableTokensFn = createServerFn({ method: "POST" })
     const { userId } = await verifyPermission(`Bearer ${token}`, "Tables.Update");
 
     const authClient = createAuthClient(token);
+    const bytesCount = await getQrTokenBytesLength(authClient);
 
     // Delete existing tables
     await authClient.from("restaurant_tables").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
-    // Insert new tables
+    // Insert new tables with secure tokens matching configured strength
     const newTables = Array.from({ length: tableCount }).map((_, i) => ({
       table_number: i + 1,
-      token: Array.from(crypto.getRandomValues(new Uint8Array(6))).map(b => b.toString(36)).join("").slice(0, 8),
+      qr_token: crypto.randomBytes(bytesCount).toString("hex"),
       is_active: true,
+      qr_status: "Active",
+      qr_version: 1,
     }));
 
     const { error } = await authClient.from("restaurant_tables").insert(newTables);
@@ -517,14 +560,27 @@ export const getTablesFn = createServerFn({ method: "GET" })
     const { token } = data;
     await verifyPermission(`Bearer ${token}`, "Tables.View");
     const authClient = createAuthClient(token);
-    const { data: tables } = await authClient.from("restaurant_tables").select("table_number, token").order("table_number");
-    return tables || [];
+    const { data: tables } = await authClient
+      .from("restaurant_tables")
+      .select("id, table_number, qr_token, qr_status, qr_version, expires_at")
+      .order("table_number");
+
+    // Map database qr_token to token field for backward compatibility
+    return (tables || []).map(t => ({
+      id: t.id,
+      table_number: t.table_number,
+      token: t.qr_token,
+      qr_status: t.qr_status,
+      qr_version: t.qr_version,
+      expires_at: t.expires_at,
+    }));
   });
 
 export const checkBucketExistsFn = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => z.object({ token: z.string() }).parse(data))
   .handler(async ({ data }) => {
     console.log("BUCKET_CHECK_STARTED");
+    await verifyPermission(`Bearer ${data.token}`, "Settings.View");
     const authClient = createAuthClient(data.token);
     try {
       const { data: buckets, error } = await authClient.storage.listBuckets();
@@ -647,6 +703,14 @@ export const updateCafeSettingsFn = createServerFn({ method: "POST" })
         qr_table_count: payload.qrTableCount,
         logo_url: payload.logoUrl || null,
         theme_color: payload.themeColor,
+        session_timeout_minutes: payload.sessionTimeoutMinutes,
+        qr_emergency_disabled: payload.qrEmergencyDisabled,
+        qr_token_strength: payload.qrTokenStrength,
+        lockdown_level: payload.lockdownLevel,
+        qr_rotation_schedule: payload.qrRotationSchedule,
+        qr_rotation_grace_period_mins: payload.qrRotationGracePeriodMins,
+        disable_legacy_qr: payload.disableLegacyQr,
+        threat_log_retention_days: payload.threatLogRetentionDays,
         updated_at: new Date().toISOString(),
       })
       .eq("id", 1); // Single row
@@ -957,7 +1021,7 @@ export const cleanInvalidOrdersFn = createServerFn({ method: "POST" })
     try {
       const { token } = data;
       // Owner-only utility
-      await verifyPermission(`Bearer ${token}`, "Orders.Delete");
+      await verifyPermission(`Bearer ${token}`, "Users.Update");
       const authClient = createAuthClient(token);
 
       console.log("CLEAN_INVALID_ORDERS", "Fetching all orders and items");
@@ -984,4 +1048,193 @@ export const cleanInvalidOrdersFn = createServerFn({ method: "POST" })
       console.error("CLEAN_INVALID_ORDERS_ERROR", err);
       throw new Error(`Cleanup failed: ${err.message}`);
     }
+  });
+
+export const fetchAnalyticsDataFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      from: z.string().optional().nullable(),
+      to: z.string().optional().nullable(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { from, to, token } = data;
+    await verifyPermission(`Bearer ${token}`, "Analytics.View");
+    const authClient = createAuthClient(token);
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    
+    return fetchAnalyticsData(authClient, fromDate, toDate);
+  });
+
+export const fetchLiveDashboardStatsFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { token } = data;
+    await verifyPermission(`Bearer ${token}`, "Orders.View");
+    const authClient = createAuthClient(token);
+    
+    return fetchLiveDashboardStats(authClient);
+  });
+
+export const revokeSessionFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      sessionId: z.string().uuid(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { sessionId, token } = data;
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
+    const authClient = createAuthClient(token);
+    
+    const { data: success, error } = await authClient.rpc("revoke_dining_session", {
+      p_session_id: sessionId
+    });
+    if (error) throw new Error(error.message);
+    
+    await createAuditLog(userId, "Session Revocation", { sessionId }, authClient);
+    return { success };
+  });
+
+export const revokeTableSessionsFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      tableId: z.string().uuid(),
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { tableId, token } = data;
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
+    const authClient = createAuthClient(token);
+    
+    const { data: success, error } = await authClient.rpc("revoke_table_sessions", {
+      p_table_id: tableId
+    });
+    if (error) throw new Error(error.message);
+    
+    await createAuditLog(userId, "Table Sessions Revocation", { tableId }, authClient);
+    return { success };
+  });
+
+export const revokeAllCustomerSessionsFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { token } = data;
+    const { userId } = await verifyPermission(`Bearer ${token}`, "Settings.Update");
+    const authClient = createAuthClient(token);
+    
+    const { data: success, error } = await authClient.rpc("revoke_all_dining_sessions");
+    if (error) throw new Error(error.message);
+    
+    await createAuditLog(userId, "Global Sessions Revocation", {}, authClient);
+    return { success };
+  });
+
+export const fetchSecurityStatsFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => 
+    z.object({
+      token: z.string(),
+    }).parse(data)
+  )
+  .handler(async ({ data }) => {
+    const { token } = data;
+    await verifyPermission(`Bearer ${token}`, "Settings.View");
+    const authClient = createAuthClient(token);
+
+    // 1. Fetch active dining sessions with table numbers
+    const { data: activeSessions, error: sessionsError } = await authClient
+      .from("dining_sessions")
+      .select(`
+        id,
+        session_token,
+        is_active,
+        created_at,
+        expires_at,
+        trust_score,
+        restaurant_tables (
+          id,
+          table_number
+        )
+      `)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false });
+
+    if (sessionsError) throw new Error(sessionsError.message);
+
+    // 2. Fetch threat logs
+    const { data: threatLogs, error: logsError } = await authClient
+      .from("security_threat_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (logsError) throw new Error(logsError.message);
+
+    // 3. Fetch Settings for Emergency Status
+    const { data: settings } = await authClient
+      .from("cafe_settings")
+      .select("lockdown_level, qr_emergency_disabled")
+      .eq("id", 1)
+      .maybeSingle();
+
+    // 4. Calculate stats counts
+    let replayBlocked = 0;
+    let invalidSignatures = 0;
+    let rateLimitViolations = 0;
+    let fingerprintMismatches = 0;
+    let tableSwitches = 0;
+
+    threatLogs?.forEach((log: any) => {
+      if (log.event_category === "Replay") replayBlocked++;
+      else if (log.event_category === "Invalid Signature") invalidSignatures++;
+      else if (log.event_category === "Rate Limit Abuse") rateLimitViolations++;
+      else if (log.event_category === "Device Mismatch") fingerprintMismatches++;
+      else if (log.event_category === "Session Hijacking") tableSwitches++;
+    });
+
+    // 5. Calculate Security Health Score
+    let healthScore = 100;
+    threatLogs?.slice(0, 20).forEach((log: any) => {
+      if (log.severity === "Critical") healthScore -= 10;
+      else if (log.severity === "High") healthScore -= 5;
+      else if (log.severity === "Medium") healthScore -= 2;
+    });
+    if (settings?.lockdown_level && settings.lockdown_level > 0) {
+      healthScore -= 15;
+    }
+    healthScore = Math.max(10, healthScore);
+
+    return {
+      healthScore,
+      activeSessions: (activeSessions || []).map((s: any) => ({
+        id: s.id,
+        tableId: s.restaurant_tables?.id || "",
+        tableNumber: s.restaurant_tables?.table_number || 0,
+        createdAt: s.created_at,
+        expiresAt: s.expires_at,
+        trustScore: s.trust_score,
+      })),
+      threatLogs: threatLogs || [],
+      stats: {
+        replayBlocked,
+        invalidSignatures,
+        rateLimitViolations,
+        fingerprintMismatches,
+        tableSwitches,
+      },
+      lockdownLevel: settings?.lockdown_level || 0,
+      qrEmergencyDisabled: settings?.qr_emergency_disabled || false,
+    };
   });

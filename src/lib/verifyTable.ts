@@ -5,87 +5,244 @@ import { supabase } from "./supabase";
 // 1. Zod Validation Schemas
 export const tableVerificationSchema = z.object({
   tableNumber: z.coerce.number().int().positive({ message: "Table number must be a positive integer" }),
-  token: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_-]+$/, { message: "Invalid characters in token" }),
+  token: z.string().min(8).max(128).regex(/^[a-fA-F0-9]+$/, { message: "Invalid characters in token" }),
 });
 
 export const cookiePayloadSchema = z.object({
-  tableNumber: z.number().int().positive(),
+  sessionId: z.string().uuid(),
+  sessionToken: z.string(),
   expiresAt: z.number().positive(),
 });
 
-// 2. Secret Key Retrieval
-const SESSION_SECRET = process.env.SESSION_SECRET || "default_smoobuds_cookie_secret_key_change_me_in_prod";
+export interface QrPayload {
+  tableId: string;
+  tableNumber: number;
+  tokenVersion: number;
+  issuedAt: number;
+  restaurantId: string;
+  qrVersion: number;
+}
 
-// 3. Cryptographic Signature Utilities
+// 2. Secret Key Rotation Engine
+const ACTIVE_SECRET = process.env.SESSION_SECRET || "default_smoobuds_cookie_secret_key_change_me_in_prod";
+const PREVIOUS_SECRET = process.env.PREVIOUS_SESSION_SECRET || null;
+
 export function signPayload(payload: string): string {
-  return crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
+  return crypto.createHmac("sha256", ACTIVE_SECRET).update(payload).digest("hex");
 }
 
 export function verifySignature(payload: string, signature: string): boolean {
-  const expectedSignature = signPayload(payload);
+  // Check active secret
+  let expectedSignature = crypto.createHmac("sha256", ACTIVE_SECRET).update(payload).digest("hex");
+  let isValid = false;
   try {
-    return crypto.timingSafeEqual(
+    isValid = crypto.timingSafeEqual(
       Buffer.from(signature, "hex"),
       Buffer.from(expectedSignature, "hex")
     );
   } catch {
-    return false;
+    isValid = false;
   }
-}
 
-// 4. Cookie Management (Session expiry: 3 hours)
-const SESSION_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
+  // Fallback to previous secret
+  if (!isValid && PREVIOUS_SECRET) {
+    try {
+      expectedSignature = crypto.createHmac("sha256", PREVIOUS_SECRET).update(payload).digest("hex");
+      isValid = crypto.timingSafeEqual(
+        Buffer.from(signature, "hex"),
+        Buffer.from(expectedSignature, "hex")
+      );
+    } catch {
+      isValid = false;
+    }
+  }
 
-export interface CookieOptions {
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite: "lax" | "strict" | "none";
-  path: string;
-  maxAge: number;
+  return isValid;
 }
 
 export const COOKIE_NAME = "smoobuds_table_session";
 
-export function createTableSession(tableNumber: number): {
-  name: string;
-  value: string;
-  options: CookieOptions;
-} {
-  const expiresAt = Date.now() + SESSION_DURATION_MS;
-  const payloadStr = `${tableNumber}:${expiresAt}`;
-  const signature = signPayload(payloadStr);
-  const cookieValue = `${payloadStr}:${signature}`;
-
-  return {
-    name: COOKIE_NAME,
-    value: cookieValue,
-    options: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 3 * 60 * 60, // 3 hours in seconds
-    },
-  };
+// 3. Signed QR Payload Utilities
+export function signQrPayload(payload: QrPayload): string {
+  const dataStr = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", ACTIVE_SECRET).update(dataStr).digest("base64url");
+  return `${dataStr}.${signature}`;
 }
 
-export function verifyTableSession(cookieValue: string | undefined): { tableNumber: number } | null {
-  if (!cookieValue) return null;
+export function verifyQrPayload(signedData: string): QrPayload | null {
+  const parts = signedData.split(".");
+  if (parts.length !== 2) return null;
+  const [dataStr, signature] = parts;
+
+  // Check active secret signature
+  let expectedSignature = crypto.createHmac("sha256", ACTIVE_SECRET).update(dataStr).digest("base64url");
+  let isValid = false;
+  try {
+    isValid = crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expectedSignature)
+    );
+  } catch {
+    isValid = false;
+  }
+
+  // Fallback to previous secret
+  if (!isValid && PREVIOUS_SECRET) {
+    try {
+      expectedSignature = crypto.createHmac("sha256", PREVIOUS_SECRET).update(dataStr).digest("base64url");
+      isValid = crypto.timingSafeEqual(
+        Buffer.from(signature),
+        Buffer.from(expectedSignature)
+      );
+    } catch {
+      isValid = false;
+    }
+  }
+
+  if (!isValid) return null;
+
+  try {
+    const jsonStr = Buffer.from(dataStr, "base64url").toString("utf8");
+    return JSON.parse(jsonStr) as QrPayload;
+  } catch {
+    return null;
+  }
+}
+
+// 4. Privacy Hashing & Subnet Extraction
+export function generateFingerprint(request: Request): string {
+  const ua = request.headers.get("user-agent") || "";
+  const lang = request.headers.get("accept-language") || "";
+  const secChUa = request.headers.get("sec-ch-ua") || "";
+  const secChUaPlatform = request.headers.get("sec-ch-ua-platform") || "";
+  
+  const raw = `${ua}|${lang}|${secChUa}|${secChUaPlatform}`;
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+export function getIpHash(request: Request): string {
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+             request.headers.get("x-real-ip") ||
+             "127.0.0.1";
+  return crypto.createHash("sha256").update(ip).digest("hex");
+}
+
+export function getSubnet(ip: string): string {
+  if (ip.includes(":")) {
+    const parts = ip.split(":");
+    return parts.slice(0, 3).join(":"); // Take first 48 bits of IPv6
+  } else {
+    const parts = ip.split(".");
+    return parts.slice(0, 3).join("."); // Take first 24 bits of IPv4
+  }
+}
+
+// 5. Database Threat Intelligence Logging
+export async function logSecurityThreat(
+  category: string,
+  severity: "Low" | "Medium" | "High" | "Critical",
+  details: any,
+  request: Request | undefined
+) {
+  try {
+    const rawIp = request ? (request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                            request.headers.get("x-real-ip") ||
+                            "127.0.0.1") : "127.0.0.1";
+    const userAgent = request ? (request.headers.get("user-agent") || "Unknown") : "Unknown";
+    
+    const hashedIp = crypto.createHash("sha256").update(rawIp).digest("hex");
+    const hashedFingerprint = request ? generateFingerprint(request) : "unknown";
+
+    const { error } = await supabase.from("security_threat_logs").insert({
+      event_category: category,
+      severity,
+      details,
+      hashed_client_ip: hashedIp,
+      hashed_browser_fingerprint: hashedFingerprint,
+      action_taken: severity === "Critical" ? "Revoke Session & Force Rescan" : "Deduct Trust Score / Flag Action",
+    });
+    if (error) {
+      console.error("Threat Log Insert Error:", error.message);
+    }
+  } catch (err) {
+    console.error("Threat logging exception:", err);
+  }
+}
+
+// 6. Database Rate Limiter
+export async function checkRateLimit(key: string, limit: number, windowSeconds: number): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc("check_rate_limit", {
+      p_key: key,
+      p_limit: limit,
+      p_window_seconds: windowSeconds,
+    });
+    if (error) {
+      console.error("Rate Limiter Database Error:", error.message);
+      return true; // Fail open
+    }
+    return !!data;
+  } catch (err) {
+    console.error("Rate Limiter exception:", err);
+    return true; // Fail open
+  }
+}
+
+export async function isIpRateLimited(request: Request, action: string, limit: number, windowSeconds: number): Promise<boolean> {
+  const ipHash = getIpHash(request);
+  const key = `rate:${action}:${ipHash}`;
+  const allowed = await checkRateLimit(key, limit, windowSeconds);
+  if (!allowed) {
+    await logSecurityThreat(
+      "Rate Limit Abuse",
+      "Medium",
+      { action, limit, windowSeconds },
+      request
+    );
+  }
+  return !allowed;
+}
+
+// 7. DB Session Verification & Trust Score Engine
+export interface SessionDetails {
+  sessionId: string;
+  sessionToken: string;
+  tableNumber: number;
+  tableId: string;
+  tableSessionId?: string;
+  displayName?: string;
+  isNameSet: boolean;
+  seatNumber?: number | null;
+}
+
+export async function verifyTableSession(
+  cookieValue: string | undefined,
+  request: Request | undefined
+): Promise<SessionDetails | null> {
+  if (!cookieValue || !request) return null;
 
   const parts = cookieValue.split(":");
-  if (parts.length !== 3) return null;
+  if (parts.length !== 4) return null;
 
-  const [tableStr, expiresStr, signature] = parts;
-  const payloadStr = `${tableStr}:${expiresStr}`;
+  const [sessionId, sessionToken, expiresStr, signature] = parts;
+  const payloadStr = `${sessionId}:${sessionToken}:${expiresStr}`;
 
+  // Validate cookie signature
   if (!verifySignature(payloadStr, signature)) {
-    console.warn("Invalid session signature detected.");
+    console.warn("Table session cookie signature validation failed.");
+    await logSecurityThreat(
+      "Session Hijacking",
+      "High",
+      { message: "Cookie signature tampering detected" },
+      request
+    );
     return null;
   }
 
-  // Parse and validate payload structure with Zod
+  // Parse payload structures
   const validationResult = cookiePayloadSchema.safeParse({
-    tableNumber: parseInt(tableStr, 10),
+    sessionId,
+    sessionToken,
     expiresAt: parseInt(expiresStr, 10),
   });
 
@@ -93,110 +250,177 @@ export function verifyTableSession(cookieValue: string | undefined): { tableNumb
     return null;
   }
 
-  const { tableNumber, expiresAt } = validationResult.data;
+  const { expiresAt } = validationResult.data;
 
+  // Check expiration in cookie
   if (Date.now() > expiresAt) {
-    console.warn(`Table session for Table ${tableNumber} has expired.`);
+    console.warn("Table session cookie expired.");
     return null;
   }
 
-  return { tableNumber };
-}
+  const currentFingerprint = generateFingerprint(request);
 
-// 5. In-Memory Rate Limiting
-interface RateLimitRecord {
-  count: number;
-  resetTime: number;
-}
+  // Validate session directly in the database
+  const { data: dbSession, error } = await supabase
+    .from("dining_sessions")
+    .select(`
+      id,
+      session_token,
+      is_active,
+      expires_at,
+      browser_fingerprint_hash,
+      user_agent_hash,
+      ip_subnet,
+      trust_score,
+      table_session_id,
+      display_name,
+      is_name_set,
+      seat_number,
+      restaurant_tables (
+        id,
+        table_number,
+        is_active,
+        qr_status
+      )
+    `)
+    .eq("id", sessionId)
+    .eq("session_token", sessionToken)
+    .maybeSingle();
 
-const verifyLimitMap = new Map<string, RateLimitRecord>();
-const sessionLimitMap = new Map<string, RateLimitRecord>();
-const orderLimitMap = new Map<string, RateLimitRecord>();
-const requestLimitMap = new Map<string, RateLimitRecord>();
-
-function checkRateLimit(
-  map: Map<string, RateLimitRecord>,
-  ip: string,
-  limit: number,
-  windowMs: number
-): boolean {
-  const now = Date.now();
-  const record = map.get(ip);
-
-  if (!record) {
-    map.set(ip, { count: 1, resetTime: now + windowMs });
-    return true;
+  if (error || !dbSession) {
+    return null;
   }
 
-  if (now > record.resetTime) {
-    map.set(ip, { count: 1, resetTime: now + windowMs });
-    return true;
+  // Check active flag & DB expiration
+  if (!dbSession.is_active || new Date(dbSession.expires_at).getTime() < Date.now()) {
+    return null;
   }
 
-  if (record.count >= limit) {
-    return false;
+  // Device Trust Engine Calculations
+  let scoreDeduction = 0;
+
+  // Fingerprint mismatch (deduct 100 - immediate revocation)
+  if (dbSession.browser_fingerprint_hash !== currentFingerprint) {
+    scoreDeduction += 100;
+    await logSecurityThreat(
+      "Device Mismatch",
+      "Critical",
+      { message: "Fingerprint changed during active session" },
+      request
+    );
   }
 
-  record.count += 1;
-  return true;
+  // User-Agent mismatch (deduct 60)
+  const currentUserAgentHash = crypto.createHash("sha256").update(request.headers.get("user-agent") || "").digest("hex");
+  if (dbSession.user_agent_hash !== currentUserAgentHash) {
+    scoreDeduction += 60;
+    await logSecurityThreat(
+      "Device Mismatch",
+      "High",
+      { message: "User-agent changed during active session" },
+      request
+    );
+  }
+
+  // IP Subnet consistency (deduct 15)
+  const currentRawIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+                       request.headers.get("x-real-ip") ||
+                       "127.0.0.1";
+  const currentSubnetHash = crypto.createHash("sha256").update(getSubnet(currentRawIp)).digest("hex");
+  if (dbSession.ip_subnet && dbSession.ip_subnet !== currentSubnetHash) {
+    scoreDeduction += 15;
+    await logSecurityThreat(
+      "Device Mismatch",
+      "Low",
+      { message: "Subnet migration detected" },
+      request
+    );
+  }
+
+  if (scoreDeduction > 0) {
+    const nextTrustScore = Math.max(0, dbSession.trust_score - scoreDeduction);
+    await supabase
+      .from("dining_sessions")
+      .update({ trust_score: nextTrustScore })
+      .eq("id", sessionId);
+
+    if (nextTrustScore < 50) {
+      await logSecurityThreat(
+        "Session Hijacking",
+        "Critical",
+        { message: "Session terminated due to low trust score", finalScore: nextTrustScore },
+        request
+      );
+      // Evict dining session
+      await supabase
+        .from("dining_sessions")
+        .update({ is_active: false })
+        .eq("id", sessionId);
+      return null;
+    }
+  }
+
+  const table = dbSession.restaurant_tables as any;
+  if (!table || !table.is_active || table.qr_status !== "Active") {
+    return null;
+  }
+
+  // Validate the shared table session
+  if (!dbSession.table_session_id) {
+    return null;
+  }
+  const { data: tableSession, error: tableSessionError } = await supabase
+    .from("table_sessions")
+    .select("is_active, expires_at")
+    .eq("id", dbSession.table_session_id)
+    .single();
+
+  if (
+    tableSessionError || 
+    !tableSession || 
+    !tableSession.is_active || 
+    new Date(tableSession.expires_at).getTime() < Date.now()
+  ) {
+    return null;
+  }
+
+  return {
+    sessionId: dbSession.id,
+    sessionToken: dbSession.session_token,
+    tableNumber: table.table_number,
+    tableId: table.id,
+    tableSessionId: dbSession.table_session_id,
+    displayName: dbSession.display_name,
+    isNameSet: dbSession.is_name_set,
+    seatNumber: dbSession.seat_number,
+  };
 }
 
-// Rate limits: Max 5 attempts per 1 minute (60,000 ms) per IP
-const RATE_LIMIT_WINDOW = 60 * 1000;
-const RATE_LIMIT_MAX_ATTEMPTS = 5;
+// 8. Dynamic QR Lookup (Plain Token & Grace Period Check)
+export async function verifyTableToken(tableNumber: number, token: string): Promise<{ tableId: string } | null> {
+  const { data: table, error } = await supabase
+    .from("restaurant_tables")
+    .select("id, is_active, qr_status, qr_token, previous_qr_token, rotated_at")
+    .eq("table_number", tableNumber)
+    .maybeSingle();
 
-export function isVerifyRateLimited(ip: string): boolean {
-  return !checkRateLimit(verifyLimitMap, ip, RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_WINDOW);
-}
-
-export function isSessionRateLimited(ip: string): boolean {
-  return !checkRateLimit(sessionLimitMap, ip, RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_WINDOW);
-}
-
-// Max 3 orders per 1 minute per IP
-export function isOrderRateLimited(ip: string): boolean {
-  return !checkRateLimit(orderLimitMap, ip, 3, 60 * 1000);
-}
-
-// Max 5 table requests per 1 minute per IP
-export function isRequestRateLimited(ip: string): boolean {
-  return !checkRateLimit(requestLimitMap, ip, 5, 60 * 1000);
-}
-
-// Periodic cleanup of rate limits every 5 minutes
-const CLEANUP_INTERVAL = 5 * 60 * 1000;
-const intervalId = setInterval(() => {
-  const now = Date.now();
-  for (const [ip, record] of verifyLimitMap.entries()) {
-    if (now > record.resetTime) verifyLimitMap.delete(ip);
-  }
-  for (const [ip, record] of sessionLimitMap.entries()) {
-    if (now > record.resetTime) sessionLimitMap.delete(ip);
-  }
-  for (const [ip, record] of orderLimitMap.entries()) {
-    if (now > record.resetTime) orderLimitMap.delete(ip);
-  }
-  for (const [ip, record] of requestLimitMap.entries()) {
-    if (now > record.resetTime) requestLimitMap.delete(ip);
-  }
-}, CLEANUP_INTERVAL);
-
-// Allow Node event loop to exit if this is the only active handle
-if (typeof intervalId.unref === "function") {
-  intervalId.unref();
-}
-
-// 6. DB Verification via Supabase RPC
-export async function verifyTableToken(tableNumber: number, token: string): Promise<boolean> {
-  const validation = tableVerificationSchema.safeParse({ tableNumber, token });
-  if (!validation.success) {
-    return false;
+  if (error || !table || !table.is_active || table.qr_status !== "Active") {
+    return null;
   }
 
-  const { data } = await supabase.rpc("verify_table_token", {
-    p_table_number: validation.data.tableNumber,
-    p_token: validation.data.token,
-  });
+  // 1. Check primary token
+  if (table.qr_token === token) {
+    return { tableId: table.id };
+  }
 
-  return !!data;
+  // 2. Check previous rotated token inside the Grace Period window
+  if (table.previous_qr_token === token && table.rotated_at) {
+    const graceMinutes = 15; // fallback default
+    const graceExpiry = new Date(table.rotated_at).getTime() + graceMinutes * 60 * 1000;
+    if (Date.now() < graceExpiry) {
+      return { tableId: table.id };
+    }
+  }
+
+  return null;
 }

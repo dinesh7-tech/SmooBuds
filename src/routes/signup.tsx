@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { ChefHat, Shield, Mail, Lock, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { signupFn } from "@/lib/userManagementActions";
 
 export const Route = createFileRoute("/signup")({
   component: SignupRoute,
@@ -32,66 +33,30 @@ function SignupRoute() {
 
     setLoading(true);
     try {
-      // 1. Sign Up with Supabase Auth
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
+      // Register via secure server function to enforce server rate limits and protect audit secrets
+      const res = await signupFn({
+        data: {
+          email,
+          password,
+          device: navigator.userAgent,
+          browser: navigator.vendor || "Unknown",
+        }
       });
 
-      if (error) throw new Error(error.message);
+      if (res.success && res.session) {
+        // Set the session locally in the browser
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: res.session.access_token,
+          refresh_token: res.session.refresh_token
+        });
 
-      // signUp() may return session=null if Supabase hasn't issued the JWT yet.
-      // We sign in immediately to guarantee an authenticated session before hitting user_roles.
-      if (data.user) {
-        let session = data.session;
-
-        if (!session) {
-          // Force a sign-in to get a real JWT
-          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
-          if (signInError) throw new Error(signInError.message);
-          session = signInData.session;
-        }
-
-        if (!session) {
-          throw new Error("Failed to obtain authenticated session after signup. Please sign in manually.");
-        }
-
-        // 2. Link Account (Associates auth.uid() with user_roles record, or creates Owner if DB is empty)
-        const { data: linkSuccess, error: linkError } = await supabase.rpc("link_user_account");
-        if (linkError) {
-          console.error("Account linking error:", linkError);
-        }
-
-        if (!linkSuccess) {
-          await supabase.auth.signOut();
-          throw new Error("Registration failed. Your email has not been pre-authorized by an Owner.");
-        }
-
-        // 3. Fetch the assigned role to welcome the user appropriately
-        const { data: roleData, error: roleError } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", data.user.id)
-          .maybeSingle();
+        if (sessionError) throw sessionError;
 
         toast.success(
-          roleData?.role === "Owner" 
+          res.role === "Owner" 
             ? "Account created! Registered as Cafe Owner." 
-            : `Account created! Registered as ${roleData?.role || 'Staff'}.`
+            : `Account created! Registered as ${res.role}.`
         );
-        
-        // 4. Record successful login
-        await supabase.rpc("record_login_attempt", {
-          p_email: email, 
-          p_success: true, 
-          p_device: navigator.userAgent, 
-          p_browser: navigator.vendor || "Unknown", 
-          p_ip: "Client", 
-          p_secret: "smoobuds_internal_rpc_secret_2026"
-        });
 
         navigate({ to: "/admin", replace: true });
       }

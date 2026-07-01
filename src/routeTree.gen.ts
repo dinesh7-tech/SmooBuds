@@ -19,6 +19,7 @@ import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminTablesRouteImport } from './routes/admin/tables'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
 import { Route as AdminSessionsRouteImport } from './routes/admin/sessions'
+import { Route as AdminSecurityRouteImport } from './routes/admin/security'
 import { Route as AdminPromotionsRouteImport } from './routes/admin/promotions'
 import { Route as AdminMenuRouteImport } from './routes/admin/menu'
 import { Route as AdminLoginHistoryRouteImport } from './routes/admin/login-history'
@@ -77,6 +78,11 @@ const AdminSettingsRoute = AdminSettingsRouteImport.update({
 const AdminSessionsRoute = AdminSessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSecurityRoute = AdminSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminPromotionsRoute = AdminPromotionsRouteImport.update({
@@ -138,6 +144,7 @@ export interface FileRoutesByFullPath {
   '/admin/login-history': typeof AdminLoginHistoryRoute
   '/admin/menu': typeof AdminMenuRoute
   '/admin/promotions': typeof AdminPromotionsRoute
+  '/admin/security': typeof AdminSecurityRoute
   '/admin/sessions': typeof AdminSessionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
@@ -158,6 +165,7 @@ export interface FileRoutesByTo {
   '/admin/login-history': typeof AdminLoginHistoryRoute
   '/admin/menu': typeof AdminMenuRoute
   '/admin/promotions': typeof AdminPromotionsRoute
+  '/admin/security': typeof AdminSecurityRoute
   '/admin/sessions': typeof AdminSessionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
@@ -180,6 +188,7 @@ export interface FileRoutesById {
   '/admin/login-history': typeof AdminLoginHistoryRoute
   '/admin/menu': typeof AdminMenuRoute
   '/admin/promotions': typeof AdminPromotionsRoute
+  '/admin/security': typeof AdminSecurityRoute
   '/admin/sessions': typeof AdminSessionsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/tables': typeof AdminTablesRoute
@@ -203,6 +212,7 @@ export interface FileRouteTypes {
     | '/admin/login-history'
     | '/admin/menu'
     | '/admin/promotions'
+    | '/admin/security'
     | '/admin/sessions'
     | '/admin/settings'
     | '/admin/tables'
@@ -223,6 +233,7 @@ export interface FileRouteTypes {
     | '/admin/login-history'
     | '/admin/menu'
     | '/admin/promotions'
+    | '/admin/security'
     | '/admin/sessions'
     | '/admin/settings'
     | '/admin/tables'
@@ -244,6 +255,7 @@ export interface FileRouteTypes {
     | '/admin/login-history'
     | '/admin/menu'
     | '/admin/promotions'
+    | '/admin/security'
     | '/admin/sessions'
     | '/admin/settings'
     | '/admin/tables'
@@ -333,6 +345,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSessionsRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/security': {
+      id: '/admin/security'
+      path: '/security'
+      fullPath: '/admin/security'
+      preLoaderRoute: typeof AdminSecurityRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/promotions': {
       id: '/admin/promotions'
       path: '/promotions'
@@ -407,6 +426,7 @@ interface AdminRouteChildren {
   AdminLoginHistoryRoute: typeof AdminLoginHistoryRoute
   AdminMenuRoute: typeof AdminMenuRoute
   AdminPromotionsRoute: typeof AdminPromotionsRoute
+  AdminSecurityRoute: typeof AdminSecurityRoute
   AdminSessionsRoute: typeof AdminSessionsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTablesRoute: typeof AdminTablesRoute
@@ -424,6 +444,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminLoginHistoryRoute: AdminLoginHistoryRoute,
   AdminMenuRoute: AdminMenuRoute,
   AdminPromotionsRoute: AdminPromotionsRoute,
+  AdminSecurityRoute: AdminSecurityRoute,
   AdminSessionsRoute: AdminSessionsRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminTablesRoute: AdminTablesRoute,
